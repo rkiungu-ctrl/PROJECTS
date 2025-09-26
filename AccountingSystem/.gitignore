@@ -1,0 +1,21 @@
+# Databases
+*.db
+*.sqlite
+*.sqbpro
+
+# Excel/CSV exports
+*.xlsx
+*.csv
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment
+.env
+venv/
+*.ps1
+
+# Node
+node_modules/
+package-lock.json

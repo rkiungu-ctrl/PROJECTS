@@ -1,0 +1,129 @@
+# main.py
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+import os, time
+
+from database import engine, Base, get_db
+import models  # ensure SQLAlchemy models are registered
+
+# Optional: if models/company.py exists, make sure it's imported so the table is created
+try:
+    from models.company import CompanyProfile  # noqa: F401
+except Exception:
+    pass
+
+# --------- Routers ---------
+from routes import (
+    customer,
+    employee,
+    payroll,
+    journal,
+    account,
+    stock_entry,
+    invoice,
+    receipt,            # renamed from payment_receipt.py to receipt.py, per your changes
+    supplier,
+    purchase,
+    bank_transaction,
+    cash_flow,
+    user,
+    reports,
+    tax,
+    customer_import,
+    product,
+    import_invoices,
+    company,            # company settings/profile
+    activity,
+    payment,            # supplier payments module (displayed as “Payments” in UI)
+)
+from routes.employee_import import router as employee_import_router
+from routes import currency as currency_routes
+from routes.nhif_band import router as nhif_band_router
+# ✅ Payroll settings (generic + NSSF periodized endpoints)
+from routes.payroll_settings import router as payroll_settings_router
+from routes.payslip import router as payslip_router
+
+
+# ✅ Ensure NSSFSetting model is registered before create_all
+import models.nssf_setting  # <-- important so nssf_settings table is created
+
+# --------- App ---------
+app = FastAPI(title="Accounting System API")
+
+# Serve static files only if the folder exists (avoids startup crash)
+if os.path.isdir("static"):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --------- CORS ---------
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify ["http://localhost:5173"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Simple request timing (helps trace slow routes)
+@app.middleware("http")
+async def timing(request: Request, call_next):
+    start = time.time()
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        dur_ms = (time.time() - start) * 1000
+        print(f"{request.method} {request.url.path} took {dur_ms:.1f}ms")
+
+# Health checks
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+@app.get("/db-ping")
+def db_ping(db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1"))
+    return {"db": "ok"}
+
+# Create tables (all models must be imported above this line)
+Base.metadata.create_all(bind=engine)
+print("🔍 Using DB at: sqlite:///./accounting_system.db")
+
+# --------- Include routers (each exactly once) ---------
+app.include_router(customer.router)
+app.include_router(employee.router)
+app.include_router(payroll.router)
+app.include_router(journal.router)
+app.include_router(account.router)
+app.include_router(stock_entry.router)
+app.include_router(invoice.router)
+app.include_router(receipt.router)
+app.include_router(supplier.router)
+app.include_router(purchase.router)
+app.include_router(bank_transaction.router)
+app.include_router(cash_flow.router)
+app.include_router(user.router)
+app.include_router(reports.router)
+app.include_router(tax.router)
+app.include_router(customer_import.router)
+app.include_router(product.router)
+app.include_router(import_invoices.router)
+app.include_router(employee_import_router, prefix="/employee_import")
+app.include_router(payment.router)
+app.include_router(company.router)
+app.include_router(activity.router)
+app.include_router(currency_routes.router)
+app.include_router(nhif_band_router)
+app.include_router(payslip_router)
+
+# ✅ Mount payroll settings (includes /payroll-settings and /payroll-settings/nssf)
+app.include_router(payroll_settings_router)
+from routes.payroll_settings import shif as shif_router
+app.include_router(shif_router)

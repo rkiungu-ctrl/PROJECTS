@@ -1,0 +1,11 @@
+export { default as Tabs } from "./Tabs";
+export { default as Tab } from "./Tab";
+export { default as PersonalDetails } from "./PersonalDetails";
+export { default as SalaryDetails } from "./SalaryDetails";
+export { default as HRDetails } from "./HRDetails";
+export { default as ContactDetails } from "./ContactDetails";
+export { default as Documents } from "./Documents";
+export { default as Deductions } from "./Deductions";
+export { default as Benefits } from "./Benefits";
+export { default as Earnings } from "./Earnings";
+export { default as LoansAdvance } from "./LoansAdvance";

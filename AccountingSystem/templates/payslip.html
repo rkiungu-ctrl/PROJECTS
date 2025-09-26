@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Payslip - {{ payroll.period }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #111; margin: 0; padding: 24px; }
+    .header { text-align: center; margin-bottom: 14px; }
+    .logo { height: 60px; margin-bottom: 6px; }
+    .company-name { font-weight: 700; font-size: 16px; }
+    .company-meta { line-height: 1.3; font-size: 12px; color: #333; }
+
+    .hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 16px; }
+
+    .row { display: flex; flex-wrap: wrap; margin: 0 -8px; }
+    .col { padding: 0 8px; }
+    .col-6 { width: 50%; }
+
+    h3, h4 { margin: 10px 0 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; border: 1px solid #ccc; vertical-align: top; }
+    th { background: #f7f7f7; text-align: left; }
+
+    .section { margin-bottom: 14px; }
+    .label { color: #555; }
+
+    .summary-table td:first-child,
+    .earn-table td:first-child,
+    .ded-table td:first-child,
+    .empr-table td:first-child { width: 60%; }
+
+    .bold { font-weight: 700; }
+    .right { text-align: right; }
+    .center { text-align: center; }
+
+    .footer-stamp { text-align: right; margin-top: 32px; }
+    .stamp { height: 60px; }
+
+    .small { font-size: 11px; color: #666; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    {% if company and company.logo_url %}
+      <img class="logo" src="{{ company.logo_url }}" alt="Company Logo" />
+    {% endif %}
+    <div class="company-name">
+      {{ company.company_name if company and company.company_name else "" }}
+    </div>
+    <div class="company-meta">
+      {% if company and company.address %}{{ company.address }}<br>{% endif %}
+      {% if company and company.email %}{{ company.email }}{% if company and company.phone %} &bull; {% endif %}{% endif %}
+      {% if company and company.phone %}{{ company.phone }}{% endif %}
+    </div>
+  </div>
+
+  <hr class="hr" />
+
+  <!-- Employee + Payslip meta -->
+  <div class="row section">
+    <div class="col col-6">
+      <table>
+        <tbody>
+          <tr><td class="label">Employee Name:</td><td>{{ employee.name }}</td></tr>
+          <tr><td class="label">Staff No:</td><td>{{ employee.staff_no }}</td></tr>
+          <tr><td class="label">Email:</td><td>{{ employee.email or "" }}</td></tr>
+          <tr><td class="label">ID Number:</td><td>{{ employee.id_number or "" }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col col-6">
+      <table>
+        <tbody>
+          <tr><td class="label">Payslip No:</td><td>SLIP/{{ payroll.period.strftime('%b') if payroll.period else '' }}</td></tr>
+          <tr><td class="label">Period:</td><td>{{ payroll.period }}</td></tr>
+          <tr><td class="label">Payment Mode:</td><td>{{ employee.payment_mode or "Bank Transfer" }}</td></tr>
+          <tr><td class="label">Bank:</td><td>{{ employee.bank_name or "" }} {{ employee.bank_account or "" }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Earnings -->
+  <div class="section">
+    <h4>Earnings</h4>
+    <table class="earn-table">
+      <tbody>
+        <tr><td>Basic Salary</td><td class="right">{{ payroll.basic_salary }}</td></tr>
+        <tr><td>House Allowance</td><td class="right">{{ payroll.house_allowance }}</td></tr>
+        <tr><td>Transport Allowance</td><td class="right">{{ payroll.transport_allowance }}</td></tr>
+        <tr><td>Other Allowances</td><td class="right">{{ payroll.other_allowances }}</td></tr>
+        <tr><td>Commission</td><td class="right">{{ payroll.commission }}</td></tr>
+        <tr><td>Bonus</td><td class="right">{{ payroll.bonus }}</td></tr>
+        <tr><td class="bold">Gross Pay</td><td class="right bold">{{ payroll.gross_pay }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Deductions -->
+  <div class="section">
+    <h4>Deductions</h4>
+    <table class="ded-table">
+      <tbody>
+        <tr><td>PAYE</td><td class="right">{{ payroll.paye }}</td></tr>
+        <tr><td>NSSF</td><td class="right">{{ payroll.nssf }}</td></tr>
+        <tr><td>NHIF / SHIF</td><td class="right">{{ payroll.shif }}</td></tr>
+        <tr><td>AHL</td><td class="right">{{ payroll.ahl }}</td></tr>
+        <tr><td>Loan</td><td class="right">{{ payroll.loan }}</td></tr>
+        <tr><td>Advance</td><td class="right">{{ payroll.advance }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Employer Contributions -->
+  <div class="section">
+    <h4>Employer Contributions</h4>
+    <table class="empr-table">
+      <tbody>
+        <tr><td>AHL (Employer)</td><td class="right">{{ ahl_employer }}</td></tr>
+        <tr><td>NSSF (Employer)</td><td class="right">{{ nssf_employer }}</td></tr>
+        <tr><td>NITA</td><td class="right">{{ nita_employer }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Summary -->
+  <div class="section">
+    <h4>Summary</h4>
+    <table class="summary-table">
+      <tbody>
+        <tr><td>Taxable Pay</td><td class="right">{{ payroll.taxable_pay }}</td></tr>
+        <tr><td>Relief</td><td class="right">{{ relief }}</td></tr>
+        <tr><td class="bold">Net Pay</td><td class="right bold">{{ payroll.net_pay }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Footer / Stamp -->
+  <div class="footer-stamp">
+    {% if company and company.stamp_url %}
+      <img class="stamp" src="{{ company.stamp_url }}" alt="Company Stamp" />
+    {% endif %}
+  </div>
+
+  <div class="small center">
+    This is a system-generated payslip.
+  </div>
+
+</body>
+</html>
