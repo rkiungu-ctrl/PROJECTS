@@ -17,6 +17,7 @@ class Invoice(Base):
     status = Column(String, default="Draft")  # Draft, Issued, Paid
     journal_ref = Column(String, nullable=True)
     source = Column(String, default="manual")  # Tracks where the invoice came from
+    cu_inv_number = Column(String, nullable=True)  # <-- Add this line
 
     customer = relationship("Customer", back_populates="invoices")
     receipts = relationship("PaymentReceipt", back_populates="invoice")

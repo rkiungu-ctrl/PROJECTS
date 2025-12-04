@@ -1,288 +1,437 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from datetime import date
-from fastapi.responses import StreamingResponse
-import io
+# routes/reports.py
+from datetime import date, datetime
+from typing import Optional, Dict, Any, List
+from io import BytesIO, StringIO
 import csv
 
+from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import StreamingResponse, Response
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
 from database import get_db
-import models
+from models.account import Account
+from models.journal import JournalEntry, JournalLine  # adjust if your names differ
 
-router = APIRouter(
-    prefix="/reports",
-    tags=["Accounting"]
-)
+# ---- PDF (ReportLab) ----
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    REPORTLAB_OK = True
+except Exception:
+    REPORTLAB_OK = False
 
-# ---------- TRIAL BALANCE ----------
-@router.get("/trial-balance/")
-def get_trial_balance(
-    start_date: date = Query(None),
-    end_date: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    query = db.query(
-        models.JournalLine.account_code,
-        models.Account.name.label("account_name"),
-        func.sum(models.JournalLine.debit).label("debit"),
-        func.sum(models.JournalLine.credit).label("credit")
-    ).join(models.Account, models.JournalLine.account_id == models.Account.id)
+router = APIRouter(prefix="/reports", tags=["Reporting"])
 
-    if start_date and end_date:
-        query = query.join(models.JournalEntry).filter(
-            models.JournalEntry.date >= start_date,
-            models.JournalEntry.date <= end_date
+NORMAL_CREDIT = {"Liability", "Equity", "Income"}
+NORMAL_DEBIT = {"Asset", "Expense"}
+
+def as_date(s: str) -> date:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid date '{s}'. Use YYYY-MM-DD.")
+
+def signed_amount(acc_type: str, debit: float, credit: float) -> float:
+    debit = debit or 0.0
+    credit = credit or 0.0
+    return (debit - credit) if acc_type in NORMAL_DEBIT else (credit - debit)
+
+def _apply_optional_filters(q, account_alias=None, entry_alias=None, line_alias=None,
+                            account_group: Optional[str]=None,
+                            tag: Optional[str]=None,
+                            project: Optional[str]=None):
+    """Safely apply filters only if corresponding columns exist."""
+    # Account group (e.g., parent group or category on Account)
+    if account_group and account_alias is not None and hasattr(account_alias, "group"):
+        q = q.filter(account_alias.group == account_group)
+    elif account_group and account_alias is not None and hasattr(account_alias, "category"):
+        q = q.filter(account_alias.category == account_group)
+
+    # Tag / Project often live on JournalEntry (or JournalLine)
+    if tag:
+        if entry_alias is not None and hasattr(entry_alias, "tag"):
+            q = q.filter(entry_alias.tag == tag)
+        elif line_alias is not None and hasattr(line_alias, "tag"):
+            q = q.filter(line_alias.tag == tag)
+
+    if project:
+        if entry_alias is not None and hasattr(entry_alias, "project"):
+            q = q.filter(entry_alias.project == project)
+        elif line_alias is not None and hasattr(line_alias, "project"):
+            q = q.filter(line_alias.project == project)
+
+    return q
+
+def sum_lines_by_account(db: Session, start: Optional[date], end: Optional[date],
+                         account_group: Optional[str]=None,
+                         tag: Optional[str]=None,
+                         project: Optional[str]=None) -> Dict[int, Dict[str, Any]]:
+    # Main totals query
+    q = (
+        db.query(
+            JL_ACCOUNT_FK.label("account_fk"),
+            func.coalesce(func.sum(JournalLine.debit), 0.0).label("debit"),
+            func.coalesce(func.sum(JournalLine.credit), 0.0).label("credit"),
         )
+        .join(JournalEntry, JournalEntry.id == JL_ENTRY_FK)
+    )
+    q = _join_account_on_fk(q)
+    q = q.group_by(JL_ACCOUNT_FK)
 
-    query = query.group_by(models.JournalLine.account_code, models.Account.name)
-    results = query.all()
-
-    return [
-        {
-            "account_code": row.account_code,
-            "account_name": row.account_name,
-            "debit": float(row.debit or 0),
-            "credit": float(row.credit or 0)
+    data = {}
+    for row in q.all():
+        data[row.account_fk] = {
+            "debit": float(row.debit or 0.0),
+            "credit": float(row.credit or 0.0)
         }
-        for row in results
-    ]
+    return data
 
-
-@router.get("/trial-balance/export/csv")
-def export_trial_balance_csv(
-    start_date: date = Query(None),
-    end_date: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    data = get_trial_balance(start_date, end_date, db)
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Account Code", "Account Name", "Debit", "Credit"])
-
-    for row in data:
-        writer.writerow([row["account_code"], row["account_name"], row["debit"], row["credit"]])
-
-    output.seek(0)
-    return StreamingResponse(output, media_type="text/csv", headers={
-        "Content-Disposition": "attachment; filename=trial_balance.csv"
-    })
-
-
-# ---------- PROFIT & LOSS ----------
-@router.get("/profit-loss/")
-def get_profit_loss(
-    start_date: date = Query(None),
-    end_date: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    query = (
+# Opening totals by account
+def opening_totals_by_account(db, start, account_group=None, tag=None, project=None):
+    q = (
         db.query(
-            models.JournalLine.account_code,
-            models.Account.name.label("account_name"),
-            models.Account.type.label("account_type"),
-            func.sum(models.JournalLine.debit).label("debit"),
-            func.sum(models.JournalLine.credit).label("credit")
+            JL_ACCOUNT_FK.label("account_fk"),
+            func.coalesce(func.sum(JournalLine.debit), 0.0).label("debit"),
+            func.coalesce(func.sum(JournalLine.credit), 0.0).label("credit"),
         )
-        .join(models.Account, models.JournalLine.account_id == models.Account.id)
-        .join(models.JournalEntry, models.JournalLine.journal_entry_id == models.JournalEntry.id)
+        .join(JournalEntry, JournalEntry.id == JL_ENTRY_FK)
+        .filter(JournalEntry.date < start)
     )
+    q = _apply_optional_filters(q, account_alias=Account, entry_alias=JournalEntry, line_alias=JournalLine,
+                               account_group=account_group, tag=tag, project=project)
+    q = _join_account_on_fk(q)
+    q = q.group_by(JL_ACCOUNT_FK)
 
-    if start_date and end_date:
-        query = query.filter(
-            models.JournalEntry.date >= start_date,
-            models.JournalEntry.date <= end_date
-        )
+    data = {}
+    for row in q.all():
+        data[row.account_fk] = {
+            "debit": float(row.debit or 0.0),
+            "credit": float(row.credit or 0.0)
+        }
+    return data
 
-    results = query.group_by(
-        models.JournalLine.account_code,
-        models.Account.name,
-        models.Account.type
-    ).all()
+# -------------------- Trial Balance (unchanged logic, but filterable) --------------------
 
-    income, expense = [], []
-    total_income, total_expense = 0, 0
-
-    for row in results:
-        amount = float(row.credit or 0) - float(row.debit or 0)
-        entry = {"account_code": row.account_code, "account_name": row.account_name, "amount": abs(amount)}
-
-        if row.account_type == "Income":
-            income.append(entry)
-            total_income += amount
-        elif row.account_type == "Expense":
-            expense.append(entry)
-            total_expense += abs(amount)
-
-    return {
-        "income": income,
-        "expense": expense,
-        "total_income": total_income,
-        "total_expense": total_expense,
-        "net_profit": total_income - total_expense
-    }
-
-
-@router.get("/profit-loss/export/csv")
-def export_profit_loss_csv(
-    start_date: date = Query(None),
-    end_date: date = Query(None),
-    db: Session = Depends(get_db)
+@router.get("/trial-balance")
+def trial_balance(
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    account_group: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
 ):
-    data = get_profit_loss(start_date, end_date, db)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Type", "Account Code", "Account Name", "Amount"])
+    start_d = as_date(start) if start else None
+    end_d = as_date(end) if end else None
 
-    for row in data["income"]:
-        writer.writerow(["Income", row["account_code"], row["account_name"], row["amount"]])
-    for row in data["expense"]:
-        writer.writerow(["Expense", row["account_code"], row["account_name"], row["amount"]])
+    period_lines = sum_lines_by_account(db, start_d, end_d, account_group, tag, project)
+    open_lines = opening_totals_by_account(db, start_d, account_group, tag, project) if start_d else {}
 
-    writer.writerow([])
-    writer.writerow(["Total Income", "", "", data["total_income"]])
-    writer.writerow(["Total Expense", "", "", data["total_expense"]])
-    writer.writerow(["Net Profit", "", "", data["net_profit"]])
+    accounts = db.query(Account).all()
+    rows = []
+    total_debits = 0.0
+    total_credits = 0.0
 
-    output.seek(0)
-    return StreamingResponse(output, media_type="text/csv", headers={
-        "Content-Disposition": "attachment; filename=profit_and_loss.csv"
-    })
-
-
-# ---------- LEDGER ----------
-@router.get("/ledger/{account_code}")
-def get_ledger(
-    account_code: str,
-    db: Session = Depends(get_db)
-):
-    lines = (
-        db.query(
-            models.JournalEntry.date,
-            models.JournalEntry.reference,
-            models.JournalLine.narration,
-            models.JournalLine.debit,
-            models.JournalLine.credit
-        )
-        .join(models.JournalEntry, models.JournalLine.journal_entry_id == models.JournalEntry.id)
-        .filter(models.JournalLine.account_code == account_code)
-        .order_by(models.JournalEntry.date, models.JournalLine.id)
-        .all()
-    )
-
-    balance = 0
-    ledger = []
-    for line in lines:
-        balance += line.debit - line.credit
-        ledger.append({
-            "date": line.date,
-            "reference": line.reference,
-            "narration": line.narration,
-            "debit": float(line.debit),
-            "credit": float(line.credit),
-            "balance": float(balance)
-        })
-    return ledger
-
-
-# ---------- BALANCE SHEET ----------
-@router.get("/balance-sheet/")
-def get_balance_sheet(
-    as_of: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    def fetch(section):
-        accounts = db.query(models.Account).filter(func.lower(models.Account.type) == section).all()
-        total, items = 0, []
-        for acc in accounts:
-            query = db.query(models.JournalLine).filter(models.JournalLine.account_id == acc.id)
-            if as_of:
-                query = query.join(models.JournalEntry).filter(models.JournalEntry.date <= as_of)
-            lines = query.all()
-            debit = sum(line.debit for line in lines)
-            credit = sum(line.credit for line in lines)
-            balance = debit - credit if section == "asset" else credit - debit
-            items.append({
-                "account_code": acc.account_code,
-                "account_name": acc.name,
-                "balance": balance
-            })
-            total += balance
-        return items, total
-
-    assets, total_assets = fetch("asset")
-    liabilities, total_liabilities = fetch("liability")
-    equity, total_equity = fetch("equity")
-
-    return {
-        "as_of": as_of or date.today(),
-        "assets": assets,
-        "liabilities": liabilities,
-        "equity": equity,
-        "total_assets": total_assets,
-        "total_liabilities": total_liabilities,
-        "total_equity": total_equity,
-        "balanced": round(total_assets, 2) == round(total_liabilities + total_equity, 2)
-    }
-
-
-@router.get("/balance-sheet/export/csv")
-def export_balance_sheet_csv(
-    as_of: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    data = get_balance_sheet(as_of, db)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Category", "Account Code", "Account Name", "Balance"])
-
-    for section in ["assets", "liabilities", "equity"]:
-        for row in data[section]:
-            writer.writerow([section.title(), row["account_code"], row["account_name"], row["balance"]])
-        writer.writerow([])
-
-    writer.writerow(["Total Assets", "", "", data["total_assets"]])
-    writer.writerow(["Total Liabilities", "", "", data["total_liabilities"]])
-    writer.writerow(["Total Equity", "", "", data["total_equity"]])
-    writer.writerow(["Balanced", "", "", data["balanced"]])
-    output.seek(0)
-    return StreamingResponse(output, media_type="text/csv", headers={
-        "Content-Disposition": "attachment; filename=balance_sheet.csv"
-    })
-
-
-@router.get("/balance-sheet/{section}/")
-def get_section(
-    section: str,
-    as_of: date = Query(None),
-    db: Session = Depends(get_db)
-):
-    normalized = section.lower().rstrip("s")
-    if normalized not in ["asset", "liability", "equity"]:
-        raise HTTPException(status_code=400, detail="Invalid section. Use asset, liability or equity.")
-
-    accounts = db.query(models.Account).filter(models.Account.type.ilike(f"%{normalized}%")).all()
-    if not accounts:
-        raise HTTPException(status_code=404, detail=f"No {normalized} accounts found.")
-
-    results, total = [], 0
     for acc in accounts:
-        query = db.query(models.JournalLine).filter(models.JournalLine.account_id == acc.id)
-        if as_of:
-            query = query.join(models.JournalEntry).filter(models.JournalEntry.date <= as_of)
-        lines = query.all()
-        debit = sum(line.debit for line in lines)
-        credit = sum(line.credit for line in lines)
-        balance = debit - credit if normalized == "asset" else credit - debit
-        results.append({
+        op = open_lines.get(acc.id, {"debit": 0.0, "credit": 0.0})
+        pr = period_lines.get(acc.id, {"debit": 0.0, "credit": 0.0})
+
+        opening = signed_amount(acc.type, op["debit"], op["credit"])
+        closing = opening + signed_amount(acc.type, pr["debit"], pr["credit"])
+
+        rows.append({
             "account_code": acc.account_code,
             "account_name": acc.name,
-            "balance": balance
+            "type": acc.type,
+            "opening": round(opening, 2),
+            "debits": round(pr["debit"], 2),
+            "credits": round(pr["credit"], 2),
+            "closing": round(closing, 2),
         })
-        total += balance
+        total_debits += pr["debit"]
+        total_credits += pr["credit"]
 
     return {
-        "as_of": as_of or date.today(),
-        "accounts": results,
-        "total": total
+        "start": start,
+        "end": end,
+        "filters": {"account_group": account_group, "tag": tag, "project": project},
+        "rows": rows,
+        "totals": {
+            "debits": round(total_debits, 2),
+            "credits": round(total_credits, 2),
+        },
     }
+
+# -------------------- Profit & Loss (filterable) --------------------
+
+@router.get("/profit-and-loss")
+def profit_and_loss(
+    start: str = Query(...),
+    end: str = Query(...),
+    account_group: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    start_d = as_date(start)
+    end_d = as_date(end)
+
+    period_lines = sum_lines_by_account(db, start_d, end_d, account_group, tag, project)
+    acc_map = {a.id: a for a in db.query(Account).all()}
+
+    income_rows, expense_rows = [], []
+    total_income, total_expense = 0.0, 0.0
+
+    for acc_id, vals in period_lines.items():
+        acc = acc_map.get(acc_id)
+        if not acc:
+            continue
+        val = signed_amount(acc.type, vals["debit"], vals["credit"])
+
+        if acc.type == "Income":
+            income_rows.append({"code": acc.account_code, "name": acc.name, "amount": round(val, 2)})
+            total_income += val
+        elif acc.type == "Expense":
+            expense_rows.append({"code": acc.account_code, "name": acc.name, "amount": round(val, 2)})
+            total_expense += val
+
+    net_profit = total_income - total_expense
+    income_rows.sort(key=lambda r: r["code"])
+    expense_rows.sort(key=lambda r: r["code"])
+
+    return {
+        "start": start,
+        "end": end,
+        "filters": {"account_group": account_group, "tag": tag, "project": project},
+        "income": {"rows": income_rows, "total": round(total_income, 2)},
+        "expenses": {"rows": expense_rows, "total": round(total_expense, 2)},
+        "net_profit": round(net_profit, 2),
+    }
+
+# -------------------- Balance Sheet (filterable) --------------------
+
+@router.get("/balance-sheet")
+def balance_sheet(
+    as_of: str = Query(...),
+    account_group: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    end_d = as_date(as_of)
+
+    period_lines = sum_lines_by_account(db, None, end_d, account_group, tag, project)
+    acc_map = {a.id: a for a in db.query(Account).all()}
+
+    assets, liabilities, equity = [], [], []
+    total_assets = total_liab = total_equity = 0.0
+
+    for acc_id, vals in period_lines.items():
+        acc = acc_map.get(acc_id)
+        if not acc:
+            continue
+        bal = signed_amount(acc.type, vals["debit"], vals["credit"])
+        row = {"code": acc.account_code, "name": acc.name, "amount": round(bal, 2)}
+
+        if acc.type == "Asset":
+            assets.append(row); total_assets += bal
+        elif acc.type == "Liability":
+            liabilities.append(row); total_liab += bal
+        elif acc.type == "Equity":
+            equity.append(row); total_equity += bal
+
+    for lst in (assets, liabilities, equity):
+        lst.sort(key=lambda r: r["code"])
+
+    return {
+        "as_of": as_of,
+        "filters": {"account_group": account_group, "tag": tag, "project": project},
+        "assets": {"rows": assets, "total": round(total_assets, 2)},
+        "liabilities": {"rows": liabilities, "total": round(total_liab, 2)},
+        "equity": {"rows": equity, "total": round(total_equity, 2)},
+        "balance_check": round(total_assets - (total_liab + total_equity), 2),
+    }
+
+# ============================ EXPORTS =========================================
+
+def _csv_response(filename: str, headers: List[str], rows: List[List[Any]]) -> Response:
+    sio = StringIO()
+    # Add BOM for Excel to recognize UTF-8
+    sio.write("\ufeff")
+    writer = csv.writer(sio)
+    writer.writerow(headers)
+    writer.writerows(rows)
+    data = sio.getvalue().encode("utf-8")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+def _pdf_table(title: str, subtitle: str, headers: List[str], rows: List[List[Any]]) -> bytes:
+    if not REPORTLAB_OK:
+        raise HTTPException(status_code=500, detail="ReportLab is not installed on the server.")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=1*cm, rightMargin=1*cm, topMargin=1*cm, bottomMargin=1*cm)
+    styles = getSampleStyleSheet()
+    elems = [
+        Paragraph(f"<b>{title}</b>", styles["Title"]),
+        Spacer(1, 6),
+        Paragraph(subtitle, styles["Normal"]),
+        Spacer(1, 12),
+    ]
+
+    data = [headers] + rows
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#f3f4f6")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.black),
+        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+        ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#d1d5db")),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6),
+        ("LEFTPADDING", (0,0), (-1,-1), 6),
+    ]))
+    elems.append(table)
+    doc.build(elems)
+    return buf.getvalue()
+
+@router.get("/profit-and-loss/export")
+def export_profit_and_loss(
+    start: str = Query(...),
+    end: str = Query(...),
+    format: str = Query("csv", regex="^(csv|pdf)$"),
+    account_group: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    pl = profit_and_loss(start, end, account_group, tag, project, db)
+
+    if format == "csv":
+        headers = ["Code", "Account", "Section", "Amount"]
+        rows = []
+        for r in pl["income"]["rows"]:
+            rows.append([r["code"], r["name"], "Income", r["amount"]])
+        for r in pl["expenses"]["rows"]:
+            rows.append([r["code"], r["name"], "Expense", r["amount"]])
+        rows += [
+            ["", "", "Total Income", pl["income"]["total"]],
+            ["", "", "Total Expenses", pl["expenses"]["total"]],
+            ["", "", "Net Profit", pl["net_profit"]],
+        ]
+        return _csv_response(f"profit_and_loss_{start}_{end}.csv", headers, rows)
+
+    # PDF
+    headers = ["Code", "Account", "Section", "Amount"]
+    rows = []
+    for r in pl["income"]["rows"]:
+        rows.append([r["code"], r["name"], "Income", f'{r["amount"]:,.2f}'])
+    rows.append(["", "", "Total Income", f'{pl["income"]["total"]:,.2f}'])
+    rows.append(["", "", "", ""])
+    for r in pl["expenses"]["rows"]:
+        rows.append([r["code"], r["name"], "Expense", f'{r["amount"]:,.2f}'])
+    rows.append(["", "", "Total Expenses", f'{pl["expenses"]["total"]:,.2f}'])
+    rows.append(["", "", "", ""])
+    rows.append(["", "", "Net Profit", f'{pl["net_profit"]:,.2f}'])
+
+    pdf_bytes = _pdf_table(
+        "Profit & Loss Statement",
+        f"Period: {start} to {end}",
+        headers,
+        rows
+    )
+    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="profit_and_loss_{start}_{end}.pdf"'})
+
+@router.get("/balance-sheet/export")
+def export_balance_sheet(
+    as_of: str = Query(...),
+    format: str = Query("csv", regex="^(csv|pdf)$"),
+    account_group: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    project: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    bs = balance_sheet(as_of, account_group, tag, project, db)
+
+    if format == "csv":
+        headers = ["Code", "Account", "Section", "Amount"]
+        rows = []
+        for r in bs["assets"]["rows"]:
+            rows.append([r["code"], r["name"], "Assets", r["amount"]])
+        rows.append(["", "", "Total Assets", bs["assets"]["total"]])
+        rows.append(["", "", "", ""])
+        for r in bs["liabilities"]["rows"]:
+            rows.append([r["code"], r["name"], "Liabilities", r["amount"]])
+        rows.append(["", "", "Total Liabilities", bs["liabilities"]["total"]])
+        for r in bs["equity"]["rows"]:
+            rows.append([r["code"], r["name"], "Equity", r["amount"]])
+        rows.append(["", "", "Total Equity", bs["equity"]["total"]])
+        rows.append(["", "", "", ""])
+        rows.append(["", "", "Balance Check (A - (L+E))", bs["balance_check"]])
+
+        return _csv_response(f"balance_sheet_{as_of}.csv", headers, rows)
+
+    # PDF
+    headers = ["Code", "Account", "Section", "Amount"]
+    rows = []
+    for r in bs["assets"]["rows"]:
+        rows.append([r["code"], r["name"], "Assets", f'{r["amount"]:,.2f}'])
+    rows.append(["", "", "Total Assets", f'{bs["assets"]["total"]:,.2f}'])
+    rows.append(["", "", "", ""])
+    for r in bs["liabilities"]["rows"]:
+        rows.append([r["code"], r["name"], "Liabilities", f'{r["amount"]:,.2f}'])
+    rows.append(["", "", "Total Liabilities", f'{bs["liabilities"]["total"]:,.2f}'])
+    for r in bs["equity"]["rows"]:
+        rows.append([r["code"], r["name"], "Equity", f'{r["amount"]:,.2f}'])
+    rows.append(["", "", "Total Equity", f'{bs["equity"]["total"]:,.2f}'])
+    rows.append(["", "", "", ""])
+    rows.append(["", "", "Balance Check (A - (L+E))", f'{bs["balance_check"]:,.2f}'])
+
+    pdf_bytes = _pdf_table(
+        "Balance Sheet",
+        f"As of: {as_of}",
+        headers,
+        rows
+    )
+    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="balance_sheet_{as_of}.pdf"'})
+
+# ---- dynamic column detection (JournalLine FKs) ------------------------------
+def _jl_col(attr: str):
+    # Return the column object if it exists, else None
+    return getattr(JournalLine, attr, None)
+
+# Try common FK names for the link to JournalEntry
+JL_ENTRY_FK = next(
+    (c for c in (_jl_col("entry_id"), _jl_col("journal_entry_id"), _jl_col("journal_id")) if c is not None),
+    None
+)
+if JL_ENTRY_FK is None:
+    raise RuntimeError(
+        "Cannot find JournalLine → JournalEntry FK. Tried: entry_id, journal_entry_id, journal_id"
+    )
+
+# Try common FK names for the link to Account
+JL_ACCOUNT_FK = next(
+    (c for c in (_jl_col("account_id"), _jl_col("account_code"), _jl_col("accountid")) if c is not None),
+    None
+)
+if JL_ACCOUNT_FK is None:
+    raise RuntimeError(
+        "Cannot find JournalLine → Account FK. Tried: account_id, account_code, accountid"
+    )
+
+# How to join to Account depending on FK type (id vs code)
+def _join_account_on_fk(query):
+    if JL_ACCOUNT_FK.key in ("account_code",):
+        return query.join(Account, Account.code == JL_ACCOUNT_FK)
+    else:
+        return query.join(Account, Account.id == JL_ACCOUNT_FK)

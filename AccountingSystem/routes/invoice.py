@@ -1,93 +1,140 @@
 # ✅ FULLY UPDATED invoice.py — Fixed journal posting with padded account codes and working PDF generation
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Path, Body
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
-from typing import Optional
-from datetime import date
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+from typing import List
+from datetime import date, datetime
 from io import BytesIO
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+# Defer importing reportlab until PDF generation to avoid blocking app startup when reportlab
+# is not installed in the environment. The invoice_pdf endpoint will return a friendly
+# error if reportlab is missing.
 
 from database import get_db
 import models
-from schemas.invoice import InvoiceCreate, InvoiceResponse
-from schemas.invoice_line import InvoiceLineCreate, InvoiceLineResponse
+from schemas.invoice import InvoiceCreate, InvoiceResponse, InvoiceListResponse
+from schemas.invoice_line import InvoiceLineResponse
 
 router = APIRouter(prefix="/invoices", tags=["Invoicing"])
 
+# --- Rounding helpers ---
+def r1(x):  # round to 1 dp
+    return round(float(x or 0) * 10) / 10.0
+
+def r0(x):  # round to 0 dp (grand totals)
+    return round(float(x or 0))
+
+def sum_r1(vals):
+    return r1(sum(float(v or 0) for v in vals))
+
 # -------------------- GET Invoices (with optional filters) --------------------
-@router.get("/")
-def get_invoices(status: Optional[str] = Query(None), from_date: Optional[date] = Query(None), to_date: Optional[date] = Query(None), db: Session = Depends(get_db)):
-    query = (
-        db.query(models.Invoice, models.Customer.name.label("customer_name"))
-        .join(models.Customer, models.Invoice.customer_id == models.Customer.id)
+@router.get("/", response_model=InvoiceListResponse)
+def list_invoices(
+    page: int = Query(1, ge=1),
+    limit: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    offset = (page - 1) * limit
+    invoices = (
+        db.query(models.Invoice)
+        .options(joinedload(models.Invoice.customer))
+        .offset(offset)
+        .limit(limit)
+        .all()
     )
-    if status:
-        query = query.filter(models.Invoice.status == status)
-    if from_date and to_date:
-        query = query.filter(
-            models.Invoice.invoice_date >= from_date,
-            models.Invoice.invoice_date <= to_date
+    total = db.query(func.count(models.Invoice.id)).scalar()
+    items = [
+        InvoiceResponse(
+            invoice_number=inv.invoice_number,
+            invoice_date=inv.invoice_date,
+            customer_name=inv.customer.name if inv.customer else "",
+            description=inv.description,
+            amount=r1(inv.amount),    # <-- round to 1dp
+            vat=r1(inv.vat),         # <-- round to 1dp
+            excise=r1(inv.excise),   # <-- round to 1dp
+            cu_inv_number=getattr(inv, "cu_inv_number", ""),
+            status=inv.status,
+            balance_due=getattr(inv, "balance_due", 0),
+            lines=[
+                InvoiceLineResponse(
+                    id=line.id,
+                    product_id=line.product_id,
+                    item=line.item,
+                    description=line.description,
+                    quantity=r1(line.quantity),
+                    unit_price=r1(line.unit_price),
+                    amount=r1(line.amount),
+                    type="Product" if line.product_id else "Service",
+                    vat=line.vat,
+                    excise=line.excise,
+                    vat_code=getattr(line, "vat_code", None),
+                    excise_code=getattr(line, "excise_code", None),
+                ) for line in inv.lines
+            ],
+            grand_total=r0(r1(inv.amount) + r1(inv.vat) + r1(inv.excise))  # <-- round to 0dp
         )
-    results = query.order_by(models.Invoice.invoice_date.desc()).all()
-    return [{**invoice.__dict__, "customer_name": customer_name} for invoice, customer_name in results]
+        for inv in invoices
+    ]
+    return InvoiceListResponse(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+        pages=(total + limit - 1) // limit,
+    )
 
 # -------------------- POST New Invoice --------------------
 @router.post("/", response_model=InvoiceResponse)
 def create_invoice(invoice: InvoiceCreate, db: Session = Depends(get_db)):
-    customer = db.query(models.Customer).filter_by(name=invoice.customer_name.strip()).first()
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.client_number == int(invoice.client_number))
+        .first()
+    )
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise HTTPException(status_code=404, detail="Customer not found (client_number)")
 
-    total = 0
-    for line in invoice.lines:
-        if line.type == "Product":
-            if not line.product_id or not line.quantity or not line.amount:
-                raise HTTPException(status_code=422, detail="Missing product_id, quantity or amount for Product line")
-            total += line.quantity * line.amount
-        elif line.type == "Service":
-            if not line.item or not line.amount:
-                raise HTTPException(status_code=422, detail="Missing item or amount for Service line")
-            total += line.amount
-        else:
-            raise HTTPException(status_code=422, detail="Invalid line type")
+    # Calculate base subtotal, vat, excise from lines
+    base_amount = sum_r1([r1(li.quantity) * r1(li.unit_price) for li in invoice.lines])
+    vat_total = sum_r1([li.vat for li in invoice.lines])
+    excise_total = sum_r1([li.excise for li in invoice.lines])
+    grand_total = r0(base_amount + vat_total + excise_total)
 
     new_invoice = models.Invoice(
         invoice_number=invoice.invoice_number,
         invoice_date=invoice.invoice_date,
         customer_id=customer.id,
         description=invoice.description,
-        amount=total,
-        vat=invoice.vat,
-        excise=invoice.excise,
+        cu_inv_number=invoice.cu_inv_number,
+        amount=base_amount,
+        vat=vat_total,
+        excise=excise_total,
         status="Issued"
     )
     db.add(new_invoice)
     db.flush()
 
     for line in invoice.lines:
-        db_line = models.InvoiceLine(
+        db.add(models.InvoiceLine(
             invoice_id=new_invoice.id,
             product_id=line.product_id if line.type == "Product" else None,
             item=line.item,
             description=line.description,
-            quantity=line.quantity if line.type == "Product" else 1,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            vat=line.vat,
-            excise=line.excise,
-            type=line.type
-        )
-        db.add(db_line)
-
+            quantity=r1(line.quantity),
+            unit_price=r1(line.unit_price),
+            amount=r1(line.amount),
+            vat=r1(line.vat),
+            excise=r1(line.excise),
+            type=line.type,
+            vat_code=getattr(line, "vat_code", None),         # <-- keep codes
+            excise_code=getattr(line, "excise_code", None),   # <--
+        ))
 
     db.commit()
     db.refresh(new_invoice)
 
     return InvoiceResponse(
-        id=new_invoice.id,
         invoice_number=new_invoice.invoice_number,
         invoice_date=new_invoice.invoice_date,
         customer_name=customer.name,
@@ -95,19 +142,26 @@ def create_invoice(invoice: InvoiceCreate, db: Session = Depends(get_db)):
         amount=new_invoice.amount,
         vat=new_invoice.vat,
         excise=new_invoice.excise,
+        cu_inv_number=getattr(new_invoice, "cu_inv_number", ""),
+        status=new_invoice.status,
+        balance_due=getattr(new_invoice, "balance_due", 0),
         lines=[
             InvoiceLineResponse(
                 id=line.id,
                 product_id=line.product_id,
+                item=line.item,
                 description=line.description,
-                quantity=line.quantity,
-                unit_price=line.unit_price,  # <-- Add this line!
-                amount=line.amount,
+                quantity=r1(line.quantity),
+                unit_price=r1(line.unit_price),
+                amount=r1(line.amount),
                 type="Product" if line.product_id else "Service",
-                vat=line.vat if line.vat is not None else 0,
-                excise=line.excise if line.excise is not None else 0
+                vat=line.vat,
+                excise=line.excise,
+                vat_code=getattr(line, "vat_code", None),         # <-- include codes in response
+                excise_code=getattr(line, "excise_code", None),   # <--
             ) for line in new_invoice.lines
-        ]
+        ],
+        grand_total=r0(new_invoice.amount + new_invoice.vat + new_invoice.excise)
     )
 
 # -------------------- POST Invoice to Journal --------------------
@@ -178,119 +232,194 @@ def post_invoice_to_journal(invoice_number: str, db: Session = Depends(get_db)):
     print("\u2705 Invoice posted and stock updated")
     return {"message": "Invoice journal posted and stock updated"}
 
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
-from io import BytesIO
-from fastapi.responses import StreamingResponse
-
-# -------------------- GET Invoice PDF --------------------
+# -------------------- GET Invoice PDF (single endpoint, company info) --------------------
 @router.get("/{invoice_number}/pdf")
-def generate_invoice_pdf(invoice_number: str, db: Session = Depends(get_db)):
-    invoice = db.query(models.Invoice).filter_by(invoice_number=invoice_number).first()
-    if not invoice:
+def invoice_pdf(invoice_number: str, db: Session = Depends(get_db)):
+    from models.company import CompanyProfile  # local import to avoid circular
+    inv = (
+        db.query(models.Invoice)
+        .options(joinedload(models.Invoice.lines))
+        .filter(models.Invoice.invoice_number == invoice_number)
+        .first()
+    )
+    if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    customer = db.query(models.Customer).filter_by(id=invoice.customer_id).first()
+    company = db.query(CompanyProfile).first()
+    # safe fallbacks
+    c_name = getattr(company, "name", None) or getattr(company, "company_name", None) or "Company"
+    c_addr = getattr(company, "address", None) or getattr(company, "postal_address", None) or ""
+    c_phone = getattr(company, "phone", None) or ""
+    c_email = getattr(company, "email", None) or ""
+    c_pin = getattr(company, "kra_pin", None) or ""
+    c_logo = getattr(company, "logo_path", None) or getattr(company, "logo_file", None)
 
-    buffer = BytesIO()
-    p = canvas.Canvas(buffer, pagesize=A4)
+    # compute totals
+    subtotal = float(inv.amount or 0)
+    excise = float(inv.excise or 0)
+    vat = float(inv.vat or 0)
+
+    # fallback: if excise/vat are 0, sum from lines
+    if excise == 0 or vat == 0:
+        excise = sum(float(li.excise or 0) for li in inv.lines) or excise
+        vat = sum(float(li.vat or 0) for li in inv.lines) or vat
+
+    # rounding rules
+    subtotal = r1(subtotal)
+    excise = r1(excise)
+    vat = r1(vat)
+    grand = r0(subtotal + excise + vat)
+
+    # build PDF (import reportlab lazily so missing dependency doesn't prevent app start)
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+    except Exception:
+        raise HTTPException(status_code=503, detail=(
+            "PDF generation dependency 'reportlab' is not installed. "
+            "Install it with: pip install reportlab"
+        ))
+
+    buf = BytesIO()
+    pdf = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
 
-    # Header
-    p.setFont("Helvetica-Bold", 14)
-    p.drawString(40, height - 50, "{{company_name}}")
-    p.setFont("Helvetica", 10)
-    p.drawString(40, height - 65, "{{company_address}}")
-    p.drawString(40, height - 80, "Email: {{email}}")
-    p.drawString(40, height - 95, "Phone: {{phone}}")
-    p.drawString(40, height - 110, "KRA PIN: {{kra_pin}}")
+    y = height - 40
+    # Logo
+    if c_logo:
+        try:
+            pdf.drawImage(c_logo, width - 160, y - 10, width=120, height=40, preserveAspectRatio=True, mask='auto')
+        except Exception:
+            pass
 
-    # Logo Placeholder
-    p.setFont("Helvetica-Oblique", 12)
-    p.drawString(400, height - 130, "[Company Logo Here]")
+    # Company block
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawString(40, y, c_name)
+    pdf.setFont("Helvetica", 9)
+    y -= 14
+    if c_addr: pdf.drawString(40, y, c_addr); y -= 12
+    if c_email: pdf.drawString(40, y, f"Email: {c_email}"); y -= 12
+    if c_phone: pdf.drawString(40, y, f"Phone: {c_phone}"); y -= 12
+    if c_pin:   pdf.drawString(40, y, f"KRA PIN: {c_pin}"); y -= 16
 
-    # Invoice metadata
-    p.setFont("Helvetica-Bold", 10)
-    p.drawString(400, height - 160, "Invoice #:")
-    p.drawString(400, height - 175, "Status:")
-    p.drawString(400, height - 190, "Date Created:")
-    p.drawString(400, height - 205, "Due Date:")
+    # Invoice header
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(40, y, "INVOICE")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, y-14, f"Invoice #: {inv.invoice_number}")
+    pdf.drawString(40, y-28, f"CU INV Number: {getattr(inv, 'cu_inv_number', '-') or '-'}")
+    pdf.drawString(300, y-14, f"Date: {inv.invoice_date}")
+    y -= 44
 
-    p.setFont("Helvetica", 10)
-    p.drawString(480, height - 160, invoice.invoice_number)
-    p.drawString(480, height - 175, invoice.status or "Issued")
-    p.drawString(480, height - 190, str(invoice.invoice_date))
-    p.drawString(480, height - 205, str(invoice.invoice_date))
+    # Bill To
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(40, y, "Bill To")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, y-12, f"{getattr(inv, 'customer_name', '') or ''}")
+    y -= 28
 
-    # Customer section
-    p.setFont("Helvetica-Bold", 10)
-    p.drawString(40, height - 160, "Bill To:")
-    p.setFont("Helvetica", 10)
-    p.drawString(60, height - 175, customer.name if customer else "Unknown Customer")
-    if customer and customer.phone:
-        p.drawString(60, height - 190, f"Phone: {customer.phone}")
-    if customer and customer.kra_pin:
-        p.drawString(60, height - 205, f"KRA PIN: {customer.kra_pin}")
+    # Description (if any)
+    if getattr(inv, "description", None):
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(40, y, "Description")
+        y -= 12
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(40, y, inv.description[:100])
+        y -= 20
 
-    # Line Items Table
-    y_start = height - 240
-    data = [["#", "Description", "Unit Price", "Quantity", "Total"]]
-    for i, line in enumerate(invoice.lines, start=1):
-        if getattr(line, "product_id", None):
-            product = db.query(models.Product).filter_by(id=line.product_id).first()
-            description = product.name if product else "Product"
-        else:
-            description = line.description or "Service"
+    # Lines header
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawString(40, y, "Type")
+    pdf.drawString(120, y, "Item")
+    pdf.drawString(260, y, "Description")
+    pdf.drawRightString(420, y, "Qty")
+    pdf.drawRightString(500, y, "Unit Price")
+    pdf.drawRightString(560, y, "Amount")
+    y -= 14
+    pdf.setFont("Helvetica", 10)
 
-        data.append([
-            str(i),
-            description,
-            f"KES {line.unit_price:.2f}",
-            str(line.quantity),
-            f"KES {line.unit_price * line.quantity:.2f}"
-        ])
+    for li in inv.lines:
+        if y < 80:  # next page
+            pdf.showPage(); y = height - 40
+        pdf.drawString(40, y, (li.type or ""))
+        pdf.drawString(120, y, (li.item or str(getattr(li, "product_id", "") or ""))[:20])
+        pdf.drawString(260, y, (li.description or "")[:40])
+        pdf.drawRightString(420, y, f"{r1(li.quantity):,.1f}")
+        pdf.drawRightString(500, y, f"{r1(li.unit_price):,.2f}")
+        pdf.drawRightString(560, y, f"{r1(li.amount):,.2f}")
+        y -= 14
 
-    table = Table(data, colWidths=[20, 255, 80, 60, 80])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
-    ]))
-    table.wrapOn(p, width, height)
-    table_height = 20 * len(data)
-    table.drawOn(p, (width - table._width) / 2, y_start - table_height)
+    # Totals box
+    if y < 80: pdf.showPage(); y = height - 40
+    y -= 10
+    pdf.setFont("Helvetica", 10)
+    pdf.drawRightString(500, y, "Subtotal")
+    pdf.drawRightString(560, y, f"{subtotal:,.2f}")
+    y -= 12
+    pdf.drawRightString(500, y, "Excise")
+    pdf.drawRightString(560, y, f"{excise:,.2f}")
+    y -= 12
+    pdf.drawRightString(500, y, "VAT")
+    pdf.drawRightString(560, y, f"{vat:,.2f}")
+    y -= 14
+    pdf.setFont("Helvetica-Bold", 10)
+    pdf.drawRightString(500, y, "Grand Total")
+    pdf.drawRightString(560, y, f"{grand:,.2f}")
 
-    # Totals
-    y = y_start - table_height - 30
-    p.setFont("Helvetica-Bold", 11)
-    totals = [
-        ["Subtotal:", f"KES {invoice.amount:.2f}"],
-        ["VAT:", f"KES {invoice.vat:.2f}"],
-        ["Excise:", f"KES {invoice.excise:.2f}"],
-        ["Grand Total:", f"KES {invoice.amount + invoice.vat + invoice.excise:.2f}"],
-    ]
-    for label, value in totals:
-        p.drawString(350, y, label)
-        p.drawRightString(width - 40, y, value)
-        y -= 15
+    pdf.showPage()
+    pdf.save()
+    buf.seek(0)
 
-    # Stamp
-    p.setFont("Helvetica-Oblique", 10)
-    p.drawString(50, y - 40, "Authorized Stamp:")
-
-    p.showPage()
-    p.save()
-    buffer.seek(0)
-
-    return StreamingResponse(buffer, media_type="application/pdf", headers={
-        "Content-Disposition": f"inline; filename=invoice_{invoice_number}.pdf"
+    return StreamingResponse(buf, media_type="application/pdf", headers={
+        "Content-Disposition": f"inline; filename=Invoice_{inv.invoice_number}.pdf"
     })
 
+# -------------------- GET Invoice by Invoice Number (includes lines) --------------------
+@router.get("/{invoice_number}", response_model=InvoiceResponse)
+def get_invoice(invoice_number: str, db: Session = Depends(get_db)):
+    inv = (
+        db.query(models.Invoice)
+        .options(joinedload(models.Invoice.customer), joinedload(models.Invoice.lines))
+        .filter(models.Invoice.invoice_number == invoice_number)
+        .first()
+    )
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
 
+    base_amount = r1(sum(r1(l.quantity) * r1(l.unit_price) for l in inv.lines))
+    vat_total   = r1(sum(r1(l.vat)    for l in inv.lines))
+    exc_total   = r1(sum(r1(l.excise) for l in inv.lines))
+    grand_total = r0(base_amount + vat_total + exc_total)
+
+    return InvoiceResponse(
+        invoice_number=inv.invoice_number,
+        invoice_date=inv.invoice_date,
+        customer_name=inv.customer.name if inv.customer else "",
+        description=inv.description,
+        amount=base_amount,
+        vat=vat_total,
+        excise=exc_total,
+        cu_inv_number=getattr(inv, "cu_inv_number", ""),
+        status=inv.status,
+        balance_due=getattr(inv, "balance_due", 0),
+        lines=[
+            InvoiceLineResponse(
+                id=l.id,
+                product_id=l.product_id,
+                item=l.item,
+                description=l.description,
+                quantity=r1(l.quantity),
+                unit_price=r1(l.unit_price),
+                amount=r1(l.amount),
+                type="Product" if l.product_id else "Service",
+                vat=r1(l.vat),
+                excise=r1(l.excise),
+                vat_code=getattr(l, "vat_code", None),          # <-- include codes
+                excise_code=getattr(l, "excise_code", None),    # <--
+            ) for l in inv.lines
+        ],
+        grand_total=grand_total
+    )
 # -------------------- GET Ledger by Customer --------------------
 @router.get("/ledger/{customer_name}")
 def get_customer_ledger(
@@ -321,7 +450,6 @@ def get_customer_ledger(
 
     return ledger
 
-
 # -------------------- GET Total Invoiced Revenue --------------------
 @router.get("/summary")
 def get_invoice_summary(
@@ -334,7 +462,6 @@ def get_invoice_summary(
     return {"total_revenue": total}
 
 #---------------------DELETE Invoice ------------------
-
 @router.delete("/{invoice_number}")
 def delete_invoice(invoice_number: str, db: Session = Depends(get_db)):
     invoice = db.query(models.Invoice).filter(models.Invoice.invoice_number == invoice_number).first()
@@ -346,112 +473,123 @@ def delete_invoice(invoice_number: str, db: Session = Depends(get_db)):
 
 # -------------------- UPDATE Invoice --------------------
 @router.put("/{invoice_number}", response_model=InvoiceResponse)
-def update_invoice(invoice_number: str, updated_invoice: InvoiceCreate, db: Session = Depends(get_db)):
-    invoice = db.query(models.Invoice).filter_by(invoice_number=invoice_number).first()
-    if not invoice:
+def update_invoice(invoice_number: str, updated: InvoiceCreate, db: Session = Depends(get_db)):
+    inv = db.query(models.Invoice).filter_by(invoice_number=invoice_number).first()
+    if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    customer = db.query(models.Customer).filter_by(name=updated_invoice.customer_name.strip()).first()
+    # strictly by client_number
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.client_number == int(updated.client_number))
+        .first()
+    )
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise HTTPException(status_code=404, detail="Customer not found (client_number)")
 
-    # Remove existing lines
-    db.query(models.InvoiceLine).filter_by(invoice_id=invoice.id).delete()
+    # wipe & re-add lines, recompute totals
+    db.query(models.InvoiceLine).filter_by(invoice_id=inv.id).delete()
 
-    # Update invoice fields
-    total = 0
-    for line in updated_invoice.lines:
-        if line.type == "Product":
-            if not line.product_id or not line.quantity or not line.amount:
-                raise HTTPException(status_code=422, detail="Missing product_id, quantity or amount for Product line")
-            total += line.quantity * line.amount
-        elif line.type == "Service":
-            if not line.item or not line.amount:
-                raise HTTPException(status_code=422, detail="Missing item or amount for Service line")
-            total += line.amount
-        else:
-            raise HTTPException(status_code=422, detail="Invalid line type")
+    base_amount = sum_r1([r1(li.quantity) * r1(li.unit_price) for li in updated.lines])
+    vat_total = sum_r1([li.vat for li in updated.lines])
+    exc_total = sum_r1([li.excise for li in updated.lines])
 
-    invoice.invoice_date = updated_invoice.invoice_date
-    invoice.customer_id = customer.id
-    invoice.description = updated_invoice.description
-    invoice.amount = total
-    invoice.vat = updated_invoice.vat
-    invoice.excise = updated_invoice.excise
+    inv.invoice_date = updated.invoice_date
+    inv.customer_id  = customer.id
+    inv.description  = updated.description
+    inv.cu_inv_number = updated.cu_inv_number
+    inv.amount = base_amount
+    inv.vat    = vat_total
+    inv.excise = exc_total
 
-    db.flush()
-
-    # Add new lines
-    for line in updated_invoice.lines:
-        db_line = models.InvoiceLine(
-            invoice_id=invoice.id,
-            product_id=line.product_id if line.type == "Product" else None,
-            item=line.item,
-            description=line.description,
-            quantity=line.quantity if line.type == "Product" else 1,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            vat=line.vat,
-            excise=line.excise,
-            type=line.type
-        )
-        db.add(db_line)
+    for li in updated.lines:
+        db.add(models.InvoiceLine(
+            invoice_id=inv.id,
+            product_id=li.product_id if li.type == "Product" else None,
+            item=li.item, description=li.description,
+            quantity=r1(li.quantity), unit_price=r1(li.unit_price),
+            amount=r1(li.amount), vat=r1(li.vat), excise=r1(li.excise),
+            type=li.type,
+            vat_code=li.vat_code,                # <-- keep codes
+            excise_code=li.excise_code,          # <--
+        ))
 
     db.commit()
-    db.refresh(invoice)
+    db.refresh(inv)
 
     return InvoiceResponse(
-        id=invoice.id,
-        invoice_number=invoice.invoice_number,
-        invoice_date=invoice.invoice_date,
+        invoice_number=inv.invoice_number,
+        invoice_date=inv.invoice_date,
         customer_name=customer.name if customer else "Unknown",
-        description=invoice.description,
-        amount=invoice.amount,
-        vat=invoice.vat,
-        excise=invoice.excise,
+        description=inv.description,
+        amount=inv.amount,
+        vat=inv.vat,
+        excise=inv.excise,
+        cu_inv_number=getattr(inv, "cu_inv_number", ""),
+        status=inv.status,
+        balance_due=getattr(inv, "balance_due", 0),
         lines=[
             InvoiceLineResponse(
                 id=line.id,
                 product_id=line.product_id,
+                item=line.item,
                 description=line.description,
-                quantity=line.quantity,
-                unit_price=line.unit_price,
-                amount=line.unit_price * line.quantity,
+                quantity=r1(line.quantity),
+                unit_price=r1(line.unit_price),
+                amount=r1(line.amount),
                 type="Product" if line.product_id else "Service",
-                vat=line.vat if line.vat is not None else 0,
-                excise=line.excise if line.excise is not None else 0
-            ) for line in invoice.lines
-        ]
+                vat=line.vat,
+                excise=line.excise,
+                vat_code=getattr(line, "vat_code", None),
+                excise_code=getattr(line, "excise_code", None),
+            ) for line in inv.lines
+        ],
+        grand_total=r0(inv.amount + inv.vat + inv.excise)
     )
-# -------------------- GET Invoice by Invoice Number (includes lines) --------------------
-@router.get("/{invoice_number}", response_model=InvoiceResponse)
-def get_invoice(invoice_number: str, db: Session = Depends(get_db)):
-    invoice = db.query(models.Invoice).filter_by(invoice_number=invoice_number).first()
+
+# -------------------- PATCH Set Customer for Invoice --------------------
+@router.patch("/{invoice_id}/set_customer")
+def set_invoice_customer(
+    invoice_id: int = Path(..., description="Invoice ID"),
+    client_number: int = Body(..., embed=True),
+    db: Session = Depends(get_db)
+):
+    invoice = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    customer = db.query(models.Customer).filter_by(id=invoice.customer_id).first()
+    customer = db.query(models.Customer).filter(models.Customer.client_number == client_number).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found with that client_number")
 
-    return InvoiceResponse(
-        id=invoice.id,
-        invoice_number=invoice.invoice_number,
-        invoice_date=invoice.invoice_date,
-        customer_name=customer.name if customer else "Unknown",
-        description=invoice.description,
-        amount=invoice.amount,
-        vat=invoice.vat,
-        excise=invoice.excise,
-        lines=[
-            InvoiceLineResponse(
-                id=line.id,
-                product_id=line.product_id,
-                description=line.description,
-                quantity=line.quantity,
-                unit_price=line.unit_price,
-                amount=line.unit_price * line.quantity,
-                type="Product" if line.product_id else "Service",
-                vat=line.vat if line.vat is not None else 0,
-                excise=line.excise if line.excise is not None else 0
-            ) for line in invoice.lines
-        ]
-    )
+    invoice.customer_id = customer.id
+    db.commit()
+    db.refresh(invoice)
+    return {"success": True, "invoice_id": invoice.id, "customer_id": customer.id}
+
+from models.invoice import Invoice
+from models.invoice_line import InvoiceLine
+
+@router.post("/batch-delete")
+def batch_delete_invoices(data: dict, db: Session = Depends(get_db)):
+    invoice_numbers = data.get("invoice_numbers", [])
+    invoices = db.query(Invoice).filter(Invoice.invoice_number.in_(invoice_numbers)).all()
+    for inv in invoices:
+        # Delete related invoice lines first
+        db.query(InvoiceLine).filter(InvoiceLine.invoice_id == inv.id).delete()
+        db.delete(inv)
+    db.commit()
+    return {"deleted": len(invoices)}
+
+def parse_date(val):
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str):
+        try:
+            return datetime.strptime(val.strip(), "%Y-%m-%d").date()
+        except Exception:
+            try:
+                return datetime.strptime(val.strip(), "%d-%b-%Y").date()
+            except Exception:
+                pass
+    return None

@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.purchase_invoice import PurchaseInvoice
-from models.purchase_invoice_line import PurchaseInvoiceLine
+from models.invoice_line import InvoiceLine  # or the correct class name
 from models.tax import Tax  # Add this import
 from database import SessionLocal
 
@@ -78,7 +78,7 @@ invoices = db.query(PurchaseInvoice).all()
 tax_options = get_tax_options(db)
 
 for inv in invoices:
-    lines = db.query(PurchaseInvoiceLine).filter(PurchaseInvoiceLine.purchase_invoice_id == inv.id).all()
+    lines = db.query(InvoiceLine).filter(InvoiceLine.invoice_id == inv.id).all()
     inv.total_amount = round(calculate_invoice_total(lines, tax_options), 1)
 db.commit()
 db.close()

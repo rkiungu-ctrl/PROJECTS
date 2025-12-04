@@ -43,4 +43,5 @@ def import_customers(file: UploadFile = File(...), db: Session = Depends(get_db)
         return {"message": f"Import completed: {created} created, {skipped} skipped (duplicates)."}
 
     except Exception as e:
+        print("Import error:", e)  # Add this line for debugging
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")

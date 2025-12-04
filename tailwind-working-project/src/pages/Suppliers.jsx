@@ -130,35 +130,41 @@ const Suppliers = () => {
   };
 
   const handleUpdate = async (e) => {
-    e.preventDefault();
-    resetAlerts();
+  e.preventDefault();
+  resetAlerts();
 
-    if (!editingId) {
-      setError("No supplier selected for update.");
-      return;
-    }
-    if (!form.name.trim()) {
-      setError("Supplier name is required");
-      return;
-    }
+  if (!editingId) {
+    setError("No supplier selected for update.");
+    return;
+  }
+  if (!form.name.trim()) {
+    setError("Supplier name is required");
+    return;
+  }
 
-    try {
-      await axios.put(SUPPLIER_BY_ID(editingId), {
-        name: form.name,
-        phone: form.phone || null,
-        email: form.email || null,
-        kra_pin: form.pin || null,
-        address: form.address || null,
-      });
-      setSuccess("Supplier updated");
-      resetForm();
-      fetchSuppliers();
-    } catch (err) {
-      console.error(err);
-      const msg = err?.response?.data?.detail || err?.message || "Failed to update supplier";
-      setError(Array.isArray(msg) ? msg.join(", ") : msg);
-    }
-  };
+  try {
+    await axios.put(SUPPLIER_BY_ID(editingId), {
+      name: form.name,
+      contact_person: form.contact_person || null,
+      phone: form.phone || null,
+      email: form.email || null,
+      kra_pin: form.pin || null,
+      address: form.address || null,
+      bank_name: form.bank_name || null,
+      bank_branch: form.bank_branch || null,
+      bank_account_number: form.bank_account_number || null,
+      bank_branch_code: form.bank_branch_code || null,
+    });
+    setSuccess("Supplier updated");
+    resetForm();
+    fetchSuppliers();
+  } catch (err) {
+    console.error(err);
+    const msg = err?.response?.data?.detail || err?.message || "Failed to update supplier";
+    setError(Array.isArray(msg) ? msg.join(", ") : msg);
+  }
+};
+
 
   const handleDelete = async (id) => {
     if (!window.confirm("Delete this supplier?")) return;

@@ -180,3 +180,65 @@ def export_products_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=products.csv"}
     )
+
+
+@router.get("/{product_id}", response_model=ProductOut)
+def get_product(
+    product_id: int,
+    db: Session = Depends(get_db)
+):
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    in_qty = sum(s.quantity for s in product.stock_entries if s.type.upper() == "IN")
+    out_qty = sum(s.quantity for s in product.stock_entries if s.type.upper() == "OUT")
+    current_stock = (product.opening_stock or 0) + in_qty - out_qty
+
+    total_cost = (product.unit_price or 0) * current_stock
+    average_cost = (product.unit_price or 0)
+    return ProductOut(
+        id=product.id,
+        name=product.name,
+        sku=product.sku,
+        unit_price=product.unit_price,
+        unit_of_measure=product.unit_of_measure,
+        opening_stock=product.opening_stock,
+        is_service=product.is_service,
+        current_stock=current_stock,
+        average_cost=average_cost,
+        total_cost=total_cost
+    )
+
+
+@router.put("/{product_id}", response_model=dict)
+def update_product(
+    product_id: int,
+    updated: ProductCreate,
+    db: Session = Depends(get_db)
+):
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    # Update fields
+    product.name = updated.name
+    product.sku = updated.sku
+    product.unit_price = updated.unit_price
+    product.unit_of_measure = updated.unit_of_measure
+    product.opening_stock = updated.opening_stock
+    product.is_service = updated.is_service
+    db.commit()
+    db.refresh(product)
+    return {"message": "Product updated successfully"}
+
+
+@router.delete("/{product_id}", response_model=dict)
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db)
+):
+    product = db.query(models.Product).filter_by(id=product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    db.delete(product)
+    db.commit()
+    return {"message": "Product deleted successfully"}

@@ -1,39 +1,68 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Date
+# models/purchase_invoice.py
+from sqlalchemy import Column, Integer, String, Date, Float, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
-from typing import Optional, Union
-from datetime import date
+
+__all__ = ["PurchaseInvoice", "PurchaseInvoiceLine"]
 
 class PurchaseInvoice(Base):
-    __tablename__ = "purchase_invoices"
+    __tablename__ = "purchase_invoices"  # plural table
 
-    id = Column(Integer, primary_key=True)
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
-    reference = Column(String(64), unique=True, index=True, nullable=False)
-    invoice_date = Column(String, nullable=False)  # Use String or Date as per your DB
-    currency_code = Column(String(8), nullable=True)
-    cu_inv_number = Column(String(64), nullable=True)
-    status = Column(String(32), default="Draft")
-    total_amount = Column(Float, default=0.0)
-    amount_paid = Column(Float, default=0.0)
-    is_recurring = Column(Integer, default=0)
-    recurrence_interval = Column(String(32), nullable=True)
-    recurrence_end_date = Column(String, nullable=True)  # Use String or Date as per your DB
-    exchange_rate = Column(Float, default=1.0)  # must exist on the model
+    id = Column(Integer, primary_key=True, index=True)
+
+    # core fields
+    supplier_id = Column(Integer, index=True, nullable=False)
+    invoice_date = Column(Date, nullable=False)
+    reference = Column(String, nullable=True)
+    status = Column(String, nullable=True)
+
+    # totals / amounts
+    total_amount = Column(Float, nullable=True, default=0.0)
+    amount_paid = Column(Float, nullable=True, default=0.0)
+
+    # currency
+    currency_code = Column(String, nullable=True)
+    exchange_rate = Column(Float, nullable=True, default=1.0)
+    cu_inv_number = Column(String, nullable=True)
+
+    # recurring
+    is_recurring = Column(Boolean, nullable=True, default=False)
+    recurrence_interval = Column(String, nullable=True)
+    recurrence_end_date = Column(Date, nullable=True)
     next_issue_date = Column(Date, nullable=True)
 
+    # relationship to lines (plural table + correct FK name)
     lines = relationship(
         "PurchaseInvoiceLine",
         back_populates="invoice",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
     )
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.invoice_date = kwargs.get('invoice_date', None)
-        self.recurrence_end_date = kwargs.get('recurrence_end_date', None)
 
-   
+class PurchaseInvoiceLine(Base):
+    __tablename__ = "purchase_invoice_lines"  # plural table
 
+    id = Column(Integer, primary_key=True, index=True)
 
+    # FK points to plural header table and uses the current FK column name
+    purchase_invoice_id = Column(
+        Integer,
+        ForeignKey("purchase_invoices.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+
+    # current column names (match your plural table schema)
+    type = Column(String, nullable=True)             # "Product" / "Service"
+    product_id = Column(Integer, nullable=True)
+    item = Column(String, nullable=True)
+    account_code = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    quantity = Column(Float, nullable=True, default=0.0)
+    unit_price = Column(Float, nullable=True, default=0.0)
+    vat_code = Column(String, nullable=True)
+    excise_code = Column(String, nullable=True)
+
+    # relationship back to header
+    invoice = relationship("PurchaseInvoice", back_populates="lines")

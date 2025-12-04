@@ -30,11 +30,13 @@ async def import_employees(file: UploadFile = File(...), db: Session = Depends(g
         if db.query(Employee).filter_by(staff_no=staff_no).first():
             skipped_existing += 1
             continue
+        # routes/employee_import.py – change email= to personal_email=
+# ...
         emp = Employee(
             staff_no=staff_no,
             name=row.get("name"),
             phone=row.get("phone"),
-            email=row.get("email"),
+            personal_email=row.get("email"),  # <-- map CSV "email" to personal_email
             kra_pin=row.get("kra_pin"),
             id_number=row.get("id_number"),
             nssf_number=row.get("nssf_number"),
@@ -52,6 +54,8 @@ async def import_employees(file: UploadFile = File(...), db: Session = Depends(g
             is_director=str(row.get("is_director", "")).lower() in ("1", "true", "yes"),
             employment_type=row.get("employment_type")
         )
+
+        
         db.add(emp)
         added += 1
     db.commit()

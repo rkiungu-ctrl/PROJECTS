@@ -1,0 +1,348 @@
+
+--- update_employee for TNL005 at 2025-10-24T13:16:53.131095 ---
+loans raw: None
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 313, in update_employee
+    result = EmployeeSchema.from_orm(employee)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\pydantic\main.py", line 1437, in from_orm
+    raise PydanticUserError(
+pydantic.errors.PydanticUserError: You must set the config attribute `from_attributes=True` to use from_orm
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T13:16:54.341941 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: NOT NULL constraint failed: loan_advances.date_issued
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 309, in update_employee
+    db.commit()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 2032, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4345, in flush
+    self._flush(objects)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4480, in _flush
+    with util.safe_reraise():
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\util\langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4441, in _flush
+    flush_context.execute()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1415, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\sql\elements.py", line 523, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1637, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1842, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1982, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 2351, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: loan_advances.date_issued
+[SQL: INSERT INTO loan_advances (employee_id, loan_type, reference_no, principal_amount, date_issued, interest_rate, repayment_period, installment_amount, deduction_method, balance_outstanding, amount_repaid, status, last_deduction_date, next_due_date, payslip_number, debit_account_id, credit_account_id, journal_entry_id, created_at, updated_at, created_by, approved_by, guarantor_id, remarks, penalty_rate, attachment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: (4, 'Loan', 'LN-TEST', 1000.0, None, 0.0, 1, 0.0, 'fixed', 0.0, 0.0, 'Active', None, None, None, None, None, None, None, None, None, None, None, None, 0.0, None)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T13:18:03.603814 ---
+loans raw: None
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 313, in update_employee
+    result = EmployeeSchema.from_orm(employee)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\pydantic\main.py", line 1437, in from_orm
+    raise PydanticUserError(
+pydantic.errors.PydanticUserError: You must set the config attribute `from_attributes=True` to use from_orm
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T13:18:03.756403 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: NOT NULL constraint failed: loan_advances.date_issued
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 309, in update_employee
+    db.commit()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 2032, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4345, in flush
+    self._flush(objects)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4480, in _flush
+    with util.safe_reraise():
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\util\langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4441, in _flush
+    flush_context.execute()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1415, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\sql\elements.py", line 523, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1637, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1842, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1982, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 2351, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: loan_advances.date_issued
+[SQL: INSERT INTO loan_advances (employee_id, loan_type, reference_no, principal_amount, date_issued, interest_rate, repayment_period, installment_amount, deduction_method, balance_outstanding, amount_repaid, status, last_deduction_date, next_due_date, payslip_number, debit_account_id, credit_account_id, journal_entry_id, created_at, updated_at, created_by, approved_by, guarantor_id, remarks, penalty_rate, attachment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: (4, 'Loan', 'LN-TEST', 1000.0, None, 0.0, 1, 0.0, 'fixed', 0.0, 0.0, 'Active', None, None, None, None, None, None, None, None, None, None, None, None, 0.0, None)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T13:26:00.587437 ---
+loans raw: None
+advances raw: None
+
+--- update_employee for TNL005 at 2025-10-24T13:26:00.731497 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: NOT NULL constraint failed: loan_advances.date_issued
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 309, in update_employee
+    db.commit()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 2032, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4345, in flush
+    self._flush(objects)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4480, in _flush
+    with util.safe_reraise():
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\util\langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4441, in _flush
+    flush_context.execute()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1415, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\sql\elements.py", line 523, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1637, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1842, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1982, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 2351, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: loan_advances.date_issued
+[SQL: INSERT INTO loan_advances (employee_id, loan_type, reference_no, principal_amount, date_issued, interest_rate, repayment_period, installment_amount, deduction_method, balance_outstanding, amount_repaid, status, last_deduction_date, next_due_date, payslip_number, debit_account_id, credit_account_id, journal_entry_id, created_at, updated_at, created_by, approved_by, guarantor_id, remarks, penalty_rate, attachment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: (4, 'Loan', 'LN-TEST', 1000.0, None, 0.0, 1, 0.0, 'fixed', 0.0, 0.0, 'Active', None, None, None, None, None, None, None, None, None, None, None, None, 0.0, None)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T13:29:20.056216 ---
+loans raw: None
+advances raw: None
+
+--- update_employee for TNL005 at 2025-10-24T13:29:20.155426 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None
+
+--- update_employee for TNL005 at 2025-10-24T13:32:52.809442 ---
+loans raw: None
+advances raw: None
+
+--- update_employee for TNL005 at 2025-10-24T13:32:52.973448 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None
+Traceback:
+Traceback (most recent call last):
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlite3.IntegrityError: UNIQUE constraint failed: loan_advances.reference_no
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\PROJECTS\AccountingSystem\routes\employee.py", line 315, in update_employee
+    db.commit()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 2032, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4345, in flush
+    self._flush(objects)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4480, in _flush
+    with util.safe_reraise():
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\util\langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\session.py", line 4441, in _flush
+    flush_context.execute()
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\orm\persistence.py", line 1233, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1415, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\sql\elements.py", line 523, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1637, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1842, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1982, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 2351, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\base.py", line 1963, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Triza\AppData\Roaming\Python\Python311\site-packages\sqlalchemy\engine\default.py", line 943, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) UNIQUE constraint failed: loan_advances.reference_no
+[SQL: INSERT INTO loan_advances (employee_id, loan_type, reference_no, principal_amount, date_issued, interest_rate, repayment_period, installment_amount, deduction_method, balance_outstanding, amount_repaid, status, last_deduction_date, next_due_date, payslip_number, debit_account_id, credit_account_id, journal_entry_id, created_at, updated_at, created_by, approved_by, guarantor_id, remarks, penalty_rate, attachment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]
+[parameters: (4, 'Loan', 'LN-TEST', 1000.0, '2025-10-24', 0.0, 1, 0.0, 'fixed', 0.0, 0.0, 'Active', None, None, None, None, None, None, None, None, None, None, None, None, 0.0, None)]
+(Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+---
+
+--- update_employee for TNL005 at 2025-10-24T14:28:05.865072 ---
+loans raw: None
+advances raw: None
+
+--- update_employee for TNL005 at 2025-10-24T14:28:06.205061 ---
+loans raw: '[{"loan_type": "Loan", "reference_no": "LN-TEST", "principal_amount": "1000"}]'
+advances raw: None

@@ -254,7 +254,7 @@ def supplier_invoices_summary(supplier_id: int, db: Session = Depends(get_db)):
 from models import Supplier, PurchaseInvoice, PurchaseInvoiceLine
 
 def calculate_invoice_total(invoice_id, db):
-    lines = db.query(PurchaseInvoiceLine).filter(PurchaseInvoiceLine.purchase_invoice_id == invoice_id).all()
+    lines = db.query(PurchaseInvoiceLine).filter(PurchaseInvoiceLine.purchase_invoices_id == invoice_id).all()
     total = 0.0
     for ln in lines:
         quantity = float(ln.quantity or 0)

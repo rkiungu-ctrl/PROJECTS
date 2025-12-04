@@ -17,13 +17,13 @@ class PurchaseInvoice(Base):
     recurrence_end_date = Column(Date, nullable=True)
 
     # Correct relationship: back_populates matches attribute name in PurchaseInvoiceLine
-    lines = relationship("PurchaseInvoiceLine", back_populates="purchase_invoice", cascade="all, delete-orphan")
+    lines = relationship("PurchaseInvoiceLine", back_populates="purchase_invoices", cascade="all, delete-orphan")
 
 class PurchaseInvoiceLine(Base):
-    __tablename__ = "purchase_invoice_lines"
+    __tablename__ = "purchase_invoices_lines"
     id = Column(Integer, primary_key=True)
-    purchase_invoice_id = Column(Integer, ForeignKey("purchase_invoices.id"))
-    purchase_invoice = relationship("PurchaseInvoice", back_populates="lines")
+    purchase_invoices_id = Column(Integer, ForeignKey("purchase_invoices.id"))
+    purchase_invoices = relationship("PurchaseInvoice", back_populates="lines")
     type = Column(String)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     item = Column(String, nullable=True)

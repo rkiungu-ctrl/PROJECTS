@@ -13,13 +13,15 @@ import Dashboard from "./pages/Dashboard";
 
 // Sales
 import Customers from "./pages/Customers";
-import Invoices from "./pages/Invoices";
+import InvoicesPage from "./pages/invoices/InvoicesPage";
+
 
 // Purchases
 import Suppliers from "./pages/Suppliers";
-import PurchaseInvoices from "./pages/PurchaseInvoices";
-import PurchaseForm from "./pages/PurchaseForm";
-import PendingRecurringInvoices from "./pages/PendingRecurringInvoices";
+import PurchaseInvoices from "./pages/Purchases/PurchaseInvoices";
+import PurchaseForm from "./pages/Purchases/PurchaseForm";
+import PendingRecurringInvoices from "./pages/Purchases/PendingRecurringInvoices";
+
 
 // Banking
 import BankBalances from "./pages/BankBalances";
@@ -34,15 +36,26 @@ import Taxes from "./pages/Taxes";
 import Currencies from "./pages/Currencies";
 
 // Payroll
-import EmployeeList from "./pages/EmployeeList";
-import PayrollPage from "./pages/PayrollPage";
-import ViewPayslips from "./pages/ViewPayslips";
-import AddSinglePayroll from "./pages/AddSinglePayroll";
-import PayrollEditPage from "./pages/PayrollEditPage";
-import PayrollSettingsPage from "./pages/PayrollSettingsPage";
+import EmployeeList from "./employee/EmployeeList";
+import PayrollPage from "./payroll/PayrollPage";
+import ViewPayslips from "./payroll/ViewPayslips";
+import AddSinglePayroll from "./payroll/AddSinglePayroll";
+import PayrollEditPage from "./payroll/PayrollEditPage";
+import PayrollSettingsPage from "./payroll/PayrollSettingsPage";
 
 // Company
 import CompanySettings from "./pages/CompanySettings";
+
+// Inventory
+import ProductList from "./pages/inventory/ProductList";
+import ProductForm from "./pages/inventory/ProductForm";
+import ProductLedger from "./pages/inventory/ProductLedger";
+import LowStockProducts from "./pages/inventory/LowStockProducts";
+import ProductView from "./pages/inventory/ProductView"; // Create this component if missing
+import ProductEdit from "./pages/inventory/ProductEdit"; // Create this component if missing
+
+// Reports
+import Reports from "./pages/Reports";
 
 function App() {
   return (
@@ -60,7 +73,7 @@ function App() {
 
           {/* Sales */}
           <Route path="/customers" element={<Customers />} />
-          <Route path="/invoices" element={<Invoices />} />
+          <Route path="/invoices" element={<InvoicesPage />} />
           <Route path="/pending-recurring" element={<PendingRecurringInvoices />} />
 
           {/* Purchases */}
@@ -69,7 +82,6 @@ function App() {
           <Route path="/purchases" element={<PurchaseInvoices />} /> {/* alias */}
           <Route path="/purchase/new" element={<PurchaseForm />} />
           <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
-          <Route path="/supplier-payments/new" element={<Payments />} />
 
           {/* Banking */}
           <Route path="/bank-balances" element={<BankBalances />} />
@@ -95,6 +107,17 @@ function App() {
           <Route path="/settings/company" element={<CompanySettings />} />
           <Route path="/company-settings" element={<CompanySettings />} />
 
+          {/* Inventory */}
+          <Route path="/inventory/products" element={<ProductList />} />
+          <Route path="/inventory/products/new" element={<ProductForm />} />
+          <Route path="/inventory/products/:id/ledger" element={<ProductLedger />} />
+          <Route path="/inventory/products/:id/view" element={<ProductView />} />
+          <Route path="/inventory/products/:id/edit" element={<ProductEdit />} />
+          <Route path="/inventory/low-stock" element={<LowStockProducts />} />
+
+          {/*Reports*/}
+          <Route path="/reports" element={<Reports />} />
+          
           {/* Fallback */}
           <Route path="*" element={<div>Not found</div>} />
         </Route>
@@ -104,3 +127,4 @@ function App() {
 }
 
 export default App;
+

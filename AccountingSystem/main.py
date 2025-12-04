@@ -1,5 +1,6 @@
 # main.py
 from fastapi import FastAPI, Depends, Request
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -14,6 +15,10 @@ try:
     from models.company import CompanyProfile  # noqa: F401
 except Exception:
     pass
+
+# --------- App ---------
+from fastapi import FastAPI
+app = FastAPI(title="Accounting System API")
 
 # --------- Routers ---------
 from routes import (
@@ -38,6 +43,7 @@ from routes import (
     company,            # company settings/profile
     activity,
     payment,            # supplier payments module (displayed as “Payments” in UI)
+    increment,
 )
 from routes.employee_import import router as employee_import_router
 from routes import currency as currency_routes
@@ -45,13 +51,9 @@ from routes.nhif_band import router as nhif_band_router
 # ✅ Payroll settings (generic + NSSF periodized endpoints)
 from routes.payroll_settings import router as payroll_settings_router
 from routes.payslip import router as payslip_router
-
-
+from routes import reports
 # ✅ Ensure NSSFSetting model is registered before create_all
 import models.nssf_setting  # <-- important so nssf_settings table is created
-
-# --------- App ---------
-app = FastAPI(title="Accounting System API")
 
 # Serve static files only if the folder exists (avoids startup crash)
 if os.path.isdir("static"):
@@ -59,13 +61,15 @@ if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --------- CORS ---------
+
+# Only allow the frontend origin for CORS
 ALLOWED_ORIGINS = [
-    "http://127.0.0.1:5173",
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or specify ["http://localhost:5173"]
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,7 +98,7 @@ def db_ping(db: Session = Depends(get_db)):
 
 # Create tables (all models must be imported above this line)
 Base.metadata.create_all(bind=engine)
-print("🔍 Using DB at: sqlite:///./accounting_system.db")
+print("Using DB at: sqlite:///./accounting_system.db")
 
 # --------- Include routers (each exactly once) ---------
 app.include_router(customer.router)
@@ -122,6 +126,8 @@ app.include_router(activity.router)
 app.include_router(currency_routes.router)
 app.include_router(nhif_band_router)
 app.include_router(payslip_router)
+app.include_router(reports.router)
+app.include_router(increment.router)
 
 # ✅ Mount payroll settings (includes /payroll-settings and /payroll-settings/nssf)
 app.include_router(payroll_settings_router)

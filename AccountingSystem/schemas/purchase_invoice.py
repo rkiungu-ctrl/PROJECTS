@@ -5,7 +5,7 @@ from decimal import Decimal
 
 # ---------- Line Schemas ----------
 class PurchaseInvoiceLineBase(BaseModel):
-    type: Optional[str] = None            # "Service" | "Product" | "Discount"
+    type: Optional[str] = None
     product_id: Optional[int] = None
     item: Optional[str] = None
     description: Optional[str] = None
@@ -23,8 +23,9 @@ class PurchaseInvoiceLineUpdate(PurchaseInvoiceLineBase):
 
 class PurchaseInvoiceLineOut(PurchaseInvoiceLineBase):
     id: int
+    is_service: Optional[bool] = None
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class PurchaseInvoiceLineIn(BaseModel):
     type: Optional[str] = None
@@ -38,7 +39,7 @@ class PurchaseInvoiceLineIn(BaseModel):
     excise_code: Optional[str] = None
 
     class Config:
-        extra = "ignore"  # tolerate fields like id, total, taxes, etc.
+        extra = "ignore"
 
 # ---------- Header Schemas ----------
 class PurchaseInvoiceBase(BaseModel):
@@ -48,7 +49,7 @@ class PurchaseInvoiceBase(BaseModel):
     currency_code: Optional[str] = None
     cu_inv_number: Optional[str] = None
     is_recurring: Optional[bool] = False
-    recurrence_interval: Optional[str] = None   # e.g. "weekly", "monthly"
+    recurrence_interval: Optional[str] = None
     recurrence_end_date: Optional[date] = None
 
 class PurchaseInvoiceCreate(PurchaseInvoiceBase):
@@ -62,20 +63,17 @@ class PurchaseInvoiceUpdate(BaseModel):
     invoice_number: Optional[str] = None
     reference: Optional[str] = None
     narration: Optional[str] = None
-
     currency_code: Optional[str] = None
-    exchange_rate: Optional[float] = None    # <-- add this
+    exchange_rate: Optional[float] = None
     cu_inv_number: Optional[str] = None
-
     is_recurring: Optional[bool] = None
     recurrence_interval: Optional[str] = None
     recurrence_end_date: Optional[Union[date, str]] = None
-
     lines: Optional[List[PurchaseInvoiceLineIn]] = None
     next_issue_date: Optional[str] = None
 
     class Config:
-        extra = "ignore"  # tolerate unknown header keys the UI might send
+        extra = "ignore"
 
 class PurchaseInvoiceOut(PurchaseInvoiceBase):
     id: int
@@ -83,4 +81,4 @@ class PurchaseInvoiceOut(PurchaseInvoiceBase):
     total_amount: Optional[Decimal] = None
     lines: List[PurchaseInvoiceLineOut] = []
     class Config:
-        from_attributes = True
+        orm_mode = True

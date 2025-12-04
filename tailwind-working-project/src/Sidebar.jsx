@@ -71,7 +71,6 @@ const Sidebar = () => {
               Purchase Invoices
             </NavLink>
           </li>
-          {/* NOTE: Supplier payments moved to Banking below */}
         </ul>
 
         {/* BANKING */}
@@ -103,6 +102,27 @@ const Sidebar = () => {
           </li>
         </ul>
 
+        {/* INVENTORY */}
+        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Inventory</div>
+        <ul className="space-y-1">
+          <li>
+            <NavLink
+              to="/inventory/products"
+              className={({ isActive }) => `${baseLink} ${isActive ? active : idle}`}
+            >
+              Products
+            </NavLink>
+          </li>
+          <li>
+            <NavLink
+              to="/inventory/low-stock"
+              className={({ isActive }) => `${baseLink} ${isActive ? active : idle}`}
+            >
+              Low Stock
+            </NavLink>
+          </li>
+        </ul>
+
         {/* PAYROLL */}
         <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Payroll</div>
         <ul className="space-y-1">
@@ -123,12 +143,15 @@ const Sidebar = () => {
             </NavLink>
           </li>
           <li>
-            <a
-              href="/payroll-settings"
-              className={`block px-4 py-2 hover:bg-gray-200 rounded ${location.pathname === "/payroll-settings" ? "bg-gray-200 font-bold" : ""}`}
+            {/* Use NavLink, not <a href>, to avoid full reload */}
+            <NavLink
+              to="/payroll-settings"
+              className={({ isActive }) =>
+                `${baseLink} ${isActive ? active : idle}`
+              }
             >
               Payroll Settings
-            </a>
+            </NavLink>
           </li>
         </ul>
 
@@ -153,6 +176,16 @@ const Sidebar = () => {
           <li>
             <NavLink to="/taxes" className={({isActive}) => `${baseLink} ${isActive ? active : idle}`}>
               Taxes
+            </NavLink>
+          </li>
+        </ul>
+
+        {/* REPORTS */}
+        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Reports</div>
+        <ul className="space-y-1">
+          <li>
+            <NavLink to="/reports" className={({isActive}) => `${baseLink} ${isActive ? active : idle}`}>
+              Reports
             </NavLink>
           </li>
         </ul>

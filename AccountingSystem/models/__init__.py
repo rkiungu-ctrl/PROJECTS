@@ -11,7 +11,7 @@ from .company import CompanyProfile
 from .supplier import Supplier
 from .bank_transaction import BankTransaction
 
-from .purchase_invoice import PurchaseInvoice
-from .purchase_invoice_line import PurchaseInvoiceLine
+from .purchase_invoice import PurchaseInvoice, PurchaseInvoiceLine
 from .invoice import Invoice
+from .invoice_line import InvoiceLine
 from .tax import Tax
