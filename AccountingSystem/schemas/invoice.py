@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 from typing import Optional, List
 from datetime import date
 from .invoice_line import InvoiceLineCreate, InvoiceLineResponse
@@ -14,6 +14,7 @@ class InvoiceCreate(BaseModel):
 class InvoiceResponse(BaseModel):
     invoice_number: str
     invoice_date: date
+    invoice_date_formatted: Optional[str] = None
     customer_name: Optional[str] = None
     description: Optional[str] = None
     amount: float

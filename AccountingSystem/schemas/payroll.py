@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import date
 from typing import Optional
 
@@ -13,6 +13,7 @@ class CreatePayroll(BaseModel):
     other_allowances: float
     commission: float
     bonus: float
+    non_cash_benefit: float = 0
 
     loan: float
     advance: float
@@ -36,12 +37,12 @@ class PayrollOut(BaseModel):  # ✅ Renamed to avoid clash with SQLAlchemy model
     nssf: float
     paye: float
     ahl: float
+    non_cash_benefit: float = 0
     loan: float
     advance: float
     net_pay: float
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
 
 
 class PayrollSummary(BaseModel):
@@ -52,16 +53,17 @@ class PayrollSummary(BaseModel):
     total_nssf: float
     total_shif: float
     total_ahl: float
+    total_other_deductions: float = 0
     total_nssf_employer: float
     total_ahl_employer: float
     total_nita_employer: float
     employee_count: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
 
 
 class PayrollDetailSchema(BaseModel):
+    employee_id: Optional[int] = None
     id: int
     payslip_number: Optional[str] = None  # <-- Add this
     staff_no: str
@@ -73,10 +75,12 @@ class PayrollDetailSchema(BaseModel):
     commission: float
     bonus: float
     gross_pay: float
+    taxable_pay: float
     nssf: float
     shif: float
     ahl: float
     paye: float
+    non_cash_benefit: float = 0
     loan: float
     advance: float
     net_pay: float
@@ -87,6 +91,7 @@ class PayrollDetailSchema(BaseModel):
     # Add these fields to match your employee model and API response:
     bank_name: Optional[str] = None
     bank_account: Optional[str] = None
+    job_title: Optional[str] = None
     branch_name: Optional[str] = None
     branch_code: Optional[str] = None
     nssf_number: Optional[str] = None
@@ -96,8 +101,7 @@ class PayrollDetailSchema(BaseModel):
     phone: Optional[str] = None
     id_number: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
 
 
 class PayrollDetail(BaseModel):
@@ -115,5 +119,4 @@ class PayrollDetail(BaseModel):
     net_pay: float
     # Add other fields as needed
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)

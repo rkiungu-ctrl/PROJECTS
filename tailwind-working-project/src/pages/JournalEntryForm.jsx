@@ -17,7 +17,7 @@ const JournalEntryForm = () => {
   useEffect(() => {
     const fetchAccounts = async () => {
       try {
-        const response = await axios.get("http://127.0.0.1:8000/accounts/", {
+        const response = await axios.get(`${API_BASE}/accounts/`, {
           auth: {
             username: localStorage.getItem("username"),
             password: localStorage.getItem("password"),
@@ -81,7 +81,7 @@ const JournalEntryForm = () => {
     };
 
     try {
-      const response = await axios.post("http://127.0.0.1:8000/journal/entries/", payload, {
+      const response = await axios.post(`${API_BASE}/journal/entries/`, payload, {
         auth: {
           username: localStorage.getItem("username"),
           password: localStorage.getItem("password"),

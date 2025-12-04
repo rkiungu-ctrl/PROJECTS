@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+import pydantic as _pyd
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Union
 from datetime import date
 from decimal import Decimal
@@ -24,8 +25,10 @@ class PurchaseInvoiceLineUpdate(PurchaseInvoiceLineBase):
 class PurchaseInvoiceLineOut(PurchaseInvoiceLineBase):
     id: int
     is_service: Optional[bool] = None
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True
 
 class PurchaseInvoiceLineIn(BaseModel):
     type: Optional[str] = None
@@ -80,5 +83,7 @@ class PurchaseInvoiceOut(PurchaseInvoiceBase):
     status: Optional[str] = None
     total_amount: Optional[Decimal] = None
     lines: List[PurchaseInvoiceLineOut] = []
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

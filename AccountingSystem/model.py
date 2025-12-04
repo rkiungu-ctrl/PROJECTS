@@ -106,6 +106,9 @@ class BankTransaction(Base):
     narration = Column(String, nullable=True)
     is_reconciled = Column(Boolean, default=False)
     cash_flow_type = Column(String, nullable=True)
+    
+    # Manager.io style categorization: separate WHO from WHAT
+    payee = Column(String, nullable=True)  # WHO: Person/company (e.g., "ABC Plumbing Company")
 
     # 🔽🔽 add these two
     journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"))

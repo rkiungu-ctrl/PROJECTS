@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import PurchaseTotals from "./PurchaseTotals";
+import { formatDateDDMMYYYY } from "../../utils/dateUtils";
 /*
   NOTE: Only use /purchases/purchase-invoices endpoint for fetching purchases.
   Removed fallback to /purchases/purchase_invoices/.
 */
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 const PAGE_SIZE = 25;
 
 // --- Helpers ---
@@ -65,6 +66,9 @@ const Purchases = () => {
   const [page, setPage] = useState(1);
   const [viewModalOpen, setViewModalOpen] = useState(false);
   const [viewPurchase, setViewPurchase] = useState(null);
+  const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const [copySourcePurchase, setCopySourcePurchase] = useState(null);
+  const [copyFormData, setCopyFormData] = useState({});
   const [company, setCompany] = useState({});
   const [taxOptions, setTaxOptions] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -208,14 +212,47 @@ const Purchases = () => {
 
   async function handleCopy(invoiceId) {
     try {
-      const res = await axios.post(`${API_BASE}/purchases/${invoiceId}/copy`);
-      if (res.data && res.data.new_invoice_id) {
-        navigate(`/purchases/${res.data.new_invoice_id}/edit`);
+      // Fetch the invoice data to populate the copy form
+      const res = await axios.get(`${API_BASE}/purchases/${invoiceId}`);
+      const invoice = res.data;
+      
+      // Set up copy form with current date and cleared reference
+      const today = new Date().toISOString().split('T')[0];
+      setCopyFormData({
+        supplier_id: invoice.supplier_id,
+        invoice_date: today,
+        reference: '', // Clear reference for new invoice
+        cu_inv_number: '',
+        currency_code: invoice.currency_code || 'KES',
+        exchange_rate: invoice.exchange_rate || 1.0,
+        lines: invoice.lines || [],
+        is_recurring: false, // New copy is not recurring by default
+        recurrence_interval: null,
+        recurrence_end_date: null
+      });
+      
+      setCopySourcePurchase(invoice);
+      setCopyModalOpen(true);
+    } catch (error) {
+      console.error('Failed to load invoice for copying:', error);
+      alert("Could not load invoice for copying");
+    }
+  }
+  
+  async function handleCreateCopy() {
+    try {
+      const res = await axios.post(`${API_BASE}/purchases/`, copyFormData);
+      if (res.data && res.data.id) {
+        setCopyModalOpen(false);
+        alert('Invoice copy created successfully!');
+        afterAction(); // Refresh the list
+        navigate(`/purchases/${res.data.id}/edit`);
       } else {
-        alert("Could not copy invoice");
+        alert("Could not create invoice copy");
       }
-    } catch {
-      alert("Could not copy invoice");
+    } catch (error) {
+      console.error('Failed to create copy:', error);
+      alert("Could not create invoice copy");
     }
   }
 
@@ -294,7 +331,7 @@ const Purchases = () => {
 
           <button
             className="px-3 py-1 rounded border bg-purple-100 text-purple-800 text-sm"
-            onClick={() => navigate("/purchases/recurring")}
+            onClick={() => navigate("/pending-recurring")}
           >
             Pending Recurring Invoices
           </button>
@@ -349,7 +386,7 @@ const Purchases = () => {
                         }}
                       />
                     </td>
-                    <td className="p-2">{p.invoice_date}</td>
+                    <td className="p-2">{formatDateDDMMYYYY(p.invoice_date)}</td>
                     <td className="p-2">{p.supplier_name || p.supplier?.name}</td>
                     <td className="p-2">{p.reference}</td>
                     <td className="p-2">{p.cu_inv_number || ""}</td>
@@ -391,6 +428,14 @@ const Purchases = () => {
                       >
                         ✏️
                         <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1 hidden group-hover:block bg-black text-white text-xs rounded px-2 py-1 z-10">Edit</span>
+                      </button>
+                      <button
+                        className="bg-purple-600 px-2 py-1 text-white text-xs rounded hover:relative group"
+                        title="Copy"
+                        onClick={() => handleCopy(p.id)}
+                      >
+                        📋
+                        <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1 hidden group-hover:block bg-black text-white text-xs rounded px-2 py-1 z-10">Copy</span>
                       </button>
                       <button
                         className="bg-red-600 px-2 py-1 text-xs text-white rounded hover:relative group"
@@ -441,6 +486,350 @@ const Purchases = () => {
           Next
         </button>
       </div>
+
+      {/* View Modal */}
+      {viewModalOpen && viewPurchase && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-4xl max-h-[80vh] overflow-y-auto w-full mx-4">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold">Purchase Invoice #{viewPurchase.reference}</h3>
+              <button
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+                onClick={() => setViewModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            
+            {/* Company Info - matching PDF layout */}
+            <div className="mb-4">
+              <div className="text-sm">
+                <div className="font-semibold">Tandaa Networks Ltd</div>
+                <div>P.O. Box 1166-80108, Kilifi</div>
+                <div>Kenya 80108</div>
+                <div>Email: admin@tandaa.africa</div>
+                <div>Phone: 0730729729| 0768886466</div>
+              </div>
+            </div>
+
+            {/* Supplier Details and Invoice Details - 4 column layout matching PDF */}
+            <div className="grid grid-cols-4 gap-4 mb-6">
+              {/* Supplier Details - spans 2 columns */}
+              <div className="col-span-2">
+                <div className="text-sm">
+                  <div className="font-semibold mb-1">To:</div>
+                  <div>{viewPurchase.supplier_name}</div>
+                  <div>Kilifi Kenya</div>
+                  <div>{viewPurchase.supplier_email || 'N/A'}</div>
+                  <div><span className="font-semibold">KRA PIN:</span> {viewPurchase.supplier_kra_pin || 'N/A'}</div>
+                </div>
+              </div>
+              
+              {/* Invoice Details Table - spans 2 columns, aligned right */}
+              <div className="col-span-2">
+                <table className="w-full text-sm border border-gray-300">
+                  <tbody>
+                    <tr>
+                      <td className="border border-gray-300 px-2 py-1 font-semibold bg-gray-50">Invoice #</td>
+                      <td className="border border-gray-300 px-2 py-1">{viewPurchase.reference}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-2 py-1 font-semibold bg-gray-50">Date Created</td>
+                      <td className="border border-gray-300 px-2 py-1">{formatDateDDMMYYYY(viewPurchase.invoice_date)}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-2 py-1 font-semibold bg-gray-50">Due Date</td>
+                      <td className="border border-gray-300 px-2 py-1">{formatDateDDMMYYYY(viewPurchase.invoice_date)}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-2 py-1 font-semibold bg-gray-50">Status</td>
+                      <td className="border border-gray-300 px-2 py-1">{viewPurchase.status}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Line Items */}
+            <div>
+              <h4 className="font-semibold mb-2">Line Items</h4>
+              {hasLines(viewPurchase) ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm border border-gray-300">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="p-2 text-left border border-gray-300">Description</th>
+                        <th className="p-2 text-center border border-gray-300">Rate</th>
+                        <th className="p-2 text-center border border-gray-300">Quantity</th>
+                        <th className="p-2 text-right border border-gray-300">Price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewPurchase.lines.map((line, idx) => {
+                        const lineTotal = (Number(line.quantity) || 0) * (Number(line.unit_price) || 0);
+                        const exciseRate = findTaxRate(line.excise_code, "Excise");
+                        const exciseAmount = lineTotal * exciseRate;
+                        const vatRate = findTaxRate(line.vat_code, "VAT");
+                        const vatAmount = (lineTotal + exciseAmount) * vatRate;
+                        const finalTotal = lineTotal + exciseAmount + vatAmount;
+                        
+                        // Combine item and description like in PDF
+                        const description = line.item && line.description && line.item !== line.description 
+                          ? `${line.item} | ${line.description}` 
+                          : (line.item || line.description || '-');
+                        
+                        return (
+                          <tr key={idx} className="border-t">
+                            <td className="p-2 border border-gray-300">{description}</td>
+                            <td className="p-2 text-center border border-gray-300">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(line.unit_price || 0)}</td>
+                            <td className="p-2 text-center border border-gray-300">{formatAmount(line.quantity || 0, 0)}</td>
+                            <td className="p-2 text-right border border-gray-300">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(finalTotal)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-gray-500">No line items found</p>
+              )}
+            </div>
+
+            {/* Summary - Aligned like PDF with bordered table */}
+            <div className="mt-6 flex justify-end">
+              <div className="w-64">
+                <table className="w-full text-sm border border-gray-300">
+                  <tbody>
+                    <tr>
+                      <td className="border border-gray-300 px-3 py-2 bg-gray-50">Sub total</td>
+                      <td className="border border-gray-300 px-3 py-2 text-right">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(calcSubTotal(viewPurchase))}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-3 py-2 bg-gray-50">VAT</td>
+                      <td className="border border-gray-300 px-3 py-2 text-right">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(calcVAT(viewPurchase))}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-3 py-2 bg-gray-50">Excise</td>
+                      <td className="border border-gray-300 px-3 py-2 text-right">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(calcExcise(viewPurchase))}</td>
+                    </tr>
+                    <tr>
+                      <td className="border border-gray-300 px-3 py-2 font-semibold bg-gray-100">Total</td>
+                      <td className="border border-gray-300 px-3 py-2 text-right font-semibold">{currencyPrefix(viewPurchase.currency_code)}{formatAmount(calcInvoiceTotal(viewPurchase))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                
+                {/* Show payment info if exists */}
+                {(viewPurchase.amount_paid || 0) > 0 && (
+                  <>
+                    <div className="flex justify-between mb-2 text-sm text-gray-600">
+                      <span>Paid on {formatDateDDMMYYYY(viewPurchase.payment_date || viewPurchase.invoice_date)}:</span>
+                      <span>{currencyPrefix(viewPurchase.currency_code)}{formatAmount(viewPurchase.amount_paid || 0)}</span>
+                    </div>
+                    <div className="flex justify-between mb-4 font-medium">
+                      <span>Amount Due:</span>
+                      <span>{currencyPrefix(viewPurchase.currency_code)}{formatAmount(calcInvoiceTotal(viewPurchase) - (viewPurchase.amount_paid || 0))}</span>
+                    </div>
+                  </>
+                )}
+
+                {/* Dual Currency - KES conversion for foreign invoices */}
+                {viewPurchase.currency_code && viewPurchase.currency_code !== baseCurrency && (
+                  <div className="border border-gray-300 p-3 mt-4 bg-gray-50">
+                    <h5 className="font-medium mb-2">Taxes {baseCurrency}</h5>
+                    <div className="flex justify-between mb-1 text-sm">
+                      <span>Untaxed Amount:</span>
+                      <span>{formatAmount(calcSubTotal(viewPurchase) * (viewPurchase.exchange_rate || 1))}{baseCurrency === 'KES' ? ' KSh' : ` ${baseCurrency}`}</span>
+                    </div>
+                    <div className="flex justify-between mb-1 text-sm">
+                      <span>VAT {Math.round(calcVAT(viewPurchase) / calcSubTotal(viewPurchase) * 100) || 16}%:</span>
+                      <span>{formatAmount(calcVAT(viewPurchase) * (viewPurchase.exchange_rate || 1))}{baseCurrency === 'KES' ? ' KSh' : ` ${baseCurrency}`}</span>
+                    </div>
+                    <div className="flex justify-between font-medium border-t pt-1">
+                      <span>Total:</span>
+                      <span>{formatAmount(calcInvoiceTotal(viewPurchase) * (viewPurchase.exchange_rate || 1))}{baseCurrency === 'KES' ? ' KSh' : ` ${baseCurrency}`}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="mt-6 flex gap-2 justify-end">
+              <button
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                onClick={() => navigate(`/purchases/${viewPurchase.id}/edit`)}
+              >
+                Edit
+              </button>
+              <button
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                onClick={() => window.open(`${API_BASE}/purchases/${viewPurchase.id}/pdf`, "_blank")}
+              >
+                Download PDF
+              </button>
+              <button
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                onClick={() => setViewModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Copy Modal */}
+      {copyModalOpen && copySourcePurchase && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl max-h-[80vh] overflow-y-auto w-full mx-4">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold">Copy Invoice: {copySourcePurchase.reference}</h3>
+              <button
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+                onClick={() => setCopyModalOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {/* Date */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Invoice Date</label>
+                <input
+                  type="date"
+                  className="w-full border rounded px-3 py-2"
+                  value={copyFormData.invoice_date}
+                  onChange={(e) => setCopyFormData(prev => ({...prev, invoice_date: e.target.value}))}
+                />
+              </div>
+
+              {/* Reference */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Reference</label>
+                <input
+                  type="text"
+                  className="w-full border rounded px-3 py-2"
+                  value={copyFormData.reference}
+                  onChange={(e) => setCopyFormData(prev => ({...prev, reference: e.target.value}))}
+                  placeholder="Enter new reference number"
+                />
+              </div>
+
+              {/* CU Invoice Number */}
+              <div>
+                <label className="block text-sm font-medium mb-1">CU Invoice Number (Optional)</label>
+                <input
+                  type="text"
+                  className="w-full border rounded px-3 py-2"
+                  value={copyFormData.cu_inv_number}
+                  onChange={(e) => setCopyFormData(prev => ({...prev, cu_inv_number: e.target.value}))}
+                  placeholder="Enter CU invoice number"
+                />
+              </div>
+
+              {/* Currency */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Currency</label>
+                  <select
+                    className="w-full border rounded px-3 py-2"
+                    value={copyFormData.currency_code}
+                    onChange={(e) => setCopyFormData(prev => ({...prev, currency_code: e.target.value}))}
+                  >
+                    <option value="KES">KES</option>
+                    <option value="USD">USD</option>
+                    <option value="EUR">EUR</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Exchange Rate</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full border rounded px-3 py-2"
+                    value={copyFormData.exchange_rate}
+                    onChange={(e) => setCopyFormData(prev => ({...prev, exchange_rate: parseFloat(e.target.value) || 1.0}))}
+                  />
+                </div>
+              </div>
+
+              {/* Recurring Options */}
+              <div>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    className="mr-2"
+                    checked={copyFormData.is_recurring}
+                    onChange={(e) => setCopyFormData(prev => ({...prev, is_recurring: e.target.checked}))}
+                  />
+                  Make this invoice recurring
+                </label>
+                
+                {copyFormData.is_recurring && (
+                  <div className="mt-2 grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Recurrence Interval</label>
+                      <select
+                        className="w-full border rounded px-3 py-2"
+                        value={copyFormData.recurrence_interval || ''}
+                        onChange={(e) => setCopyFormData(prev => ({...prev, recurrence_interval: e.target.value}))}
+                      >
+                        <option value="">Select interval</option>
+                        <option value="1 months">Monthly</option>
+                        <option value="3 months">Quarterly</option>
+                        <option value="12 months">Yearly</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">End Date (Optional)</label>
+                      <input
+                        type="date"
+                        className="w-full border rounded px-3 py-2"
+                        value={copyFormData.recurrence_end_date || ''}
+                        onChange={(e) => setCopyFormData(prev => ({...prev, recurrence_end_date: e.target.value}))}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Line Items Preview */}
+              <div>
+                <label className="block text-sm font-medium mb-2">Line Items (from original invoice)</label>
+                <div className="max-h-40 overflow-y-auto border rounded p-2 bg-gray-50">
+                  {copyFormData.lines.map((line, idx) => (
+                    <div key={idx} className="text-sm py-1 border-b last:border-b-0">
+                      <strong>{line.item}</strong> - {currencyPrefix(copyFormData.currency_code)}{line.unit_price} x {line.quantity}
+                      {line.description && <div className="text-gray-600">{line.description}</div>}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Line items will be copied exactly. You can edit them after creating the copy.
+                </p>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="mt-6 flex gap-2 justify-end">
+              <button
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                onClick={() => setCopyModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                onClick={handleCreateCopy}
+              >
+                Create Copy & Edit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

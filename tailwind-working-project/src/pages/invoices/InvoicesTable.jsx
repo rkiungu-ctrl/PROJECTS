@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { formatDateDDMMYYYY } from "../../utils/dateUtils";
 
 const r1 = (v) => Math.round(Number(v ?? 0) * 10) / 10;
 const r0 = (v) => Math.round(Number(v ?? 0));
@@ -141,7 +142,7 @@ export default function InvoicesTable({
                 />
               </td>
               <td>{(perPage || rows.length) * (page - 1) + i + 1}</td>
-              <td>{inv.invoice_date}</td>
+              <td>{inv.invoice_date_formatted || formatDateDDMMYYYY(inv.invoice_date)}</td>
               <td className="truncate">{inv.name || inv.customer_name}</td>
               <td>{inv.invoice_number}</td>
               <td className="truncate">{inv.cu_inv_number}</td>

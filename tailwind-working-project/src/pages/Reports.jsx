@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../lib/api";
 
 const ReportType = {
   PL: "Profit & Loss",

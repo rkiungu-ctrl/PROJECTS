@@ -34,6 +34,9 @@ def update_increment(inc_id: int, inc: IncrementCreate, db: Session = Depends(ge
         raise HTTPException(status_code=404, detail="Increment not found")
     increment.start_date = inc.start_date
     increment.gross_pay = inc.gross_pay
+    # Handle end_date properly - allow it to be updated
+    if hasattr(inc, 'end_date'):
+        increment.end_date = inc.end_date
     db.commit()
     db.refresh(increment)
     return increment

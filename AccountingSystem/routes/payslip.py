@@ -9,7 +9,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from weasyprint import HTML
 
 from database import get_db
 import models
@@ -74,6 +73,7 @@ def get_payslip(
             "nssf": payroll.nssf,
             "ahl": payroll.ahl,
             "paye": payroll.paye,
+            "non_cash_benefit": getattr(payroll, 'non_cash_benefit', 0.0),
             "loan": payroll.loan,
             "advance": payroll.advance,
         },
@@ -123,6 +123,7 @@ def view_payslip_html(
             "request": request,
             "employee": employee,
             "payroll": payroll,
+            "non_cash_benefit": getattr(payroll, 'non_cash_benefit', 0.0),
             "company": company,
             "relief": getattr(payroll, "relief", 2400),
             "ahl_employer": payroll.ahl_employer,
@@ -174,12 +175,18 @@ def download_payslip_pdf(
             "nita_employer": payroll.nita_employer,
         }
     )
-
-    pdf_bytes = HTML(string=rendered_html, base_url=str(request.base_url)).write_pdf()
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=payslip_{staff_no}_{period}.pdf"},
+    # Server-side PDF generation via WeasyPrint has been disabled to avoid
+    # runtime crashes on platforms without the WeasyPrint native deps (eg
+    # Windows). If you need a PDF endpoint later, switch to Playwright or
+    # re-enable WeasyPrint in a Linux/WSL environment. For now return a
+    # clear 501 so clients know to use the frontend (html2canvas/jspdf)
+    # or a separate backend rendering service.
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Server-side PDF generation is disabled. Use the front-end html2canvas/jspdf "
+            "workflow or enable Playwright/WeasyPrint on the server."
+        ),
     )
 
 
@@ -216,6 +223,7 @@ def export_payslips_xlsx(
         "NSSF",
         "PAYE",
         "AHL",
+        "Non-Cash Benefit",
         "Loan",
         "Advance",
         "Net Pay",
@@ -244,7 +252,8 @@ def export_payslips_xlsx(
                 record.shif,
                 record.nssf,
                 record.paye,
-                record.ahl,
+                    record.ahl,
+                    getattr(record, 'non_cash_benefit', 0.0),
                 record.loan,
                 record.advance,
                 record.net_pay,

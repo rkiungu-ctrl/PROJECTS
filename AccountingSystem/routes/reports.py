@@ -1,5 +1,5 @@
 # routes/reports.py
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, List
 from io import BytesIO, StringIO
 import csv
@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from pydantic import BaseModel
 
 from database import get_db
 from models.account import Account
@@ -28,6 +29,97 @@ router = APIRouter(prefix="/reports", tags=["Reporting"])
 
 NORMAL_CREDIT = {"Liability", "Equity", "Income"}
 NORMAL_DEBIT = {"Asset", "Expense"}
+
+class DashboardSummary(BaseModel):
+    period: str
+    revenue: float
+    expenses: float
+    net_profit: float
+
+
+def _get_period_range(period: str) -> tuple[Optional[date], Optional[date]]:
+    """Return (start_date, end_date_exclusive) for a period key."""
+    today = date.today()
+
+    def first_of_next_month(d: date) -> date:
+        # jump to somewhere in next month then back to day 1
+        return (d.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+    period = (period or "").lower()
+
+    if period == "this_month":
+        start = today.replace(day=1)
+        end = first_of_next_month(start)
+
+    elif period == "last_month":
+        this_month_start = today.replace(day=1)
+        start = (this_month_start - timedelta(days=1)).replace(day=1)
+        end = this_month_start
+
+    elif period == "this_quarter":
+        # quarters: Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec
+        q = (today.month - 1) // 3  # 0–3
+        start_month = q * 3 + 1
+        start = date(today.year, start_month, 1)
+        # first day of the next quarter
+        if start_month == 10:
+            end = date(today.year + 1, 1, 1)
+        else:
+            end = date(today.year, start_month + 3, 1)
+
+    elif period == "ytd":
+        start = date(today.year, 1, 1)
+        end = today + timedelta(days=1)  # inclusive of today
+
+    else:
+        # fallback: everything (no date filter)
+        return None, None
+
+    return start, end
+
+
+@router.get("/dashboard-summary", response_model=DashboardSummary)
+def get_dashboard_summary(
+    period: str = Query("this_month"),
+    db: Session = Depends(get_db),
+):
+    start, end = _get_period_range(period)
+
+    # Income/Revenue types - adjust these based on your account types
+    income_types = ["Income"]
+    expense_types = ["Expense"]
+
+    # Base query for journal lines with entries and accounts
+    q_base = (
+        db.query(JournalLine, JournalEntry, Account)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .join(Account, JournalLine.account_id == Account.id)
+    )
+
+    if start and end:
+        q_base = q_base.filter(JournalEntry.date >= start, JournalEntry.date < end)
+
+    # Revenue = credits - debits on income accounts
+    income_lines = q_base.filter(Account.type.in_(income_types)).all()
+    total_revenue = 0.0
+    for line, _, _ in income_lines:
+        total_revenue += float(line.credit or 0) - float(line.debit or 0)
+
+    # Expenses = debits - credits on expense accounts
+    expense_lines = q_base.filter(Account.type.in_(expense_types)).all()
+    total_expenses = 0.0
+    for line, _, _ in expense_lines:
+        total_expenses += float(line.debit or 0) - float(line.credit or 0)
+
+    net_profit = total_revenue - total_expenses
+
+    return DashboardSummary(
+        period=period,
+        revenue=total_revenue,
+        expenses=total_expenses,
+        net_profit=net_profit,
+    )
+
 
 def as_date(s: str) -> date:
     try:

@@ -9,7 +9,7 @@ import InvoiceForm from "./InvoiceForm";
 import InvoicesTable from "./InvoicesTable";
 import ViewInvoiceModal from "./ViewInvoiceModal";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 const num = (v) => Number(v ?? 0);
 
 export default function InvoicesPage() {

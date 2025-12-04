@@ -36,6 +36,11 @@ class Payroll(Base):
     # ✅ Link to journal
     payroll_journal_ref = Column(String, nullable=True)
 
+    # One-off non-cash benefit applied to this payroll (persisted when a pending
+    # EmployeeNonCashBenefit is picked up). This increases taxable pay for PAYE
+    # calculation only and is not part of gross_pay.
+    non_cash_benefit = Column(Float, default=0)
+
     # ✅ Relationship with Employee model
     employee = relationship("Employee", back_populates="payrolls")
 

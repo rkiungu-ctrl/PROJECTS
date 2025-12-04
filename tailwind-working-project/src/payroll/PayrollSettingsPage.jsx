@@ -1,13 +1,14 @@
 // src/pages/PayrollSettingsPage.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 
-const API_ROOT = "http://127.0.0.1:8000";
+import { API_BASE as API_ROOT } from "../lib/api";
 const SETTINGS_BASE = `${API_ROOT}/payroll-settings`;     // generic settings root
 const NSSF_ENDPOINT = `${SETTINGS_BASE}/nssf/`;            // NSSF periods  (change to /nssf/ if your backend uses trailing slash)
 const NHIF_ENDPOINT = `${SETTINGS_BASE}/nhif/`;
 const SHIF_ENDPOINT = `${SETTINGS_BASE}/shif/`;
-const PAYE_ENDPOINT = `${SETTINGS_BASE}/paye`;
+const PAYE_ENDPOINT = `${SETTINGS_BASE}/paye/`;
+const AHL_ENDPOINT = `${SETTINGS_BASE}/ahl/`;
 
 const emptySetting = {
   name: "",
@@ -98,6 +99,7 @@ export default function PayrollSettingsPage() {
   const [bandForm, setBandForm] = useState(INIT_BAND);
   const [payeErr, setPayeErr] = useState("");
   const [editingPayeId, setEditingPayeId] = useState(null);
+  const formTopRef = useRef(null);
 
   // Example: Paste JSON array of bands
   const [bulkBands, setBulkBands] = useState("");
@@ -114,8 +116,71 @@ export default function PayrollSettingsPage() {
     fetchNssf();
     fetchNhif();
     fetchShif();
+    fetchAhl();
     fetchPaye();
   }, []);
+
+  // ---- AHL settings state ----
+  const [ahlRows, setAhlRows] = useState([]);
+  const [ahlForm, setAhlForm] = useState({ id: null, start_date: "", end_date: "", employee_rate: 0.015, employer_rate: 0.015, relief_rate: "", relief_cap_month: "" });
+  const [ahlErr, setAhlErr] = useState("");
+
+  const fetchAhl = async () => {
+    setAhlErr("");
+    try {
+      const { data } = await axios.get(AHL_ENDPOINT);
+      setAhlRows(data || []);
+    } catch (e) {
+      setAhlErr("Failed to load AHL tables.");
+    }
+  };
+
+  const submitAhl = async (e) => {
+    e && e.preventDefault && e.preventDefault();
+    setAhlErr("");
+    try {
+      const payload = {
+        start_date: ahlForm.start_date,
+        end_date: ahlForm.end_date || null,
+        employee_rate: Number(ahlForm.employee_rate),
+        employer_rate: Number(ahlForm.employer_rate),
+        relief_rate: ahlForm.relief_rate === "" ? null : Number(ahlForm.relief_rate),
+        relief_cap_month: ahlForm.relief_cap_month === "" ? null : Number(ahlForm.relief_cap_month),
+      };
+      if (ahlForm.id) {
+        await axios.put(`${AHL_ENDPOINT}${ahlForm.id}`, payload);
+      } else {
+        await axios.post(AHL_ENDPOINT, payload);
+      }
+      setAhlForm({ id: null, start_date: "", end_date: "", employee_rate: 0.015, employer_rate: 0.015, relief_rate: "", relief_cap_month: "" });
+      fetchAhl();
+    } catch (e2) {
+      setAhlErr(e2?.response?.data?.detail || "Save failed");
+    }
+  };
+
+  const editAhl = (r) => {
+    setAhlForm({
+      id: r.id,
+      start_date: fmtDate(r.start_date),
+      end_date: fmtDate(r.end_date || ""),
+      employee_rate: r.employee_rate,
+      employer_rate: r.employer_rate,
+      relief_rate: r.relief_rate ?? "",
+      relief_cap_month: r.relief_cap_month ?? "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteAhl = async (id) => {
+    if (!window.confirm("Delete this AHL table?")) return;
+    try {
+      await axios.delete(`${AHL_ENDPOINT}${id}`);
+      fetchAhl();
+    } catch {
+      setAhlErr("Delete failed");
+    }
+  };
 
   // =========================
   // Generic settings handlers
@@ -454,58 +519,65 @@ export default function PayrollSettingsPage() {
   const fetchPaye = async () => {
     try {
       const { data } = await axios.get(PAYE_ENDPOINT);
-      setPayeRows(data || []);
+      const rows = Array.isArray(data) ? data : (data?.items || []);
+      setPayeRows(rows || []);
     } catch {
       setPayeErr("Failed to load PAYE tables.");
     }
   };
 
-  // Submit PAYE table
-  const submitPaye = async (e) => {
-    e.preventDefault();
+  // Submit PAYE table (create or update with bands)
+  const submitPaye = async () => {
     setPayeErr("");
     const payload = {
       start_date: payeForm.start_date,
       end_date: payeForm.end_date || null,
-      personal_relief: Number(payeForm.personal_relief),
-      insurance_relief_rate: payeForm.insurance_relief_rate ? Number(payeForm.insurance_relief_rate) : null,
-      insurance_relief_cap: payeForm.insurance_relief_cap ? Number(payeForm.insurance_relief_cap) : null,
-      bands: payeForm.bands.map(b => ({
+      personal_relief: Number(payeForm.personal_relief || 0),
+      insurance_relief_rate: payeForm.insurance_relief_rate === "" ? null : Number(payeForm.insurance_relief_rate),
+      insurance_relief_cap: payeForm.insurance_relief_cap === "" ? null : Number(payeForm.insurance_relief_cap),
+      bands: (payeForm.bands || []).map((b) => ({
         lower: Number(b.lower),
-        upper: b.upper !== "" ? Number(b.upper) : null,
-        rate: Number(b.rate),
+        upper: b.upper === "" ? null : Number(b.upper),
+        rate: Number(b.rate) > 1 ? Number(b.rate) / 100 : Number(b.rate),
       })),
     };
+
     try {
       if (editingPayeId) {
-        await axios.put(`${PAYE_ENDPOINT}/${editingPayeId}`, payload);
+        await axios.put(`${PAYE_ENDPOINT}${editingPayeId}`, payload);
       } else {
         await axios.post(PAYE_ENDPOINT, payload);
       }
-      setPayeForm(INIT_PAYE);
+      await fetchPaye();
+      // reset editor
       setEditingPayeId(null);
-      fetchPaye();
+      setPayeForm(INIT_PAYE);
+      setBandForm(INIT_BAND);
     } catch (e2) {
       setPayeErr(e2?.response?.data?.detail || "Save failed");
     }
   };
 
-  const editPaye = (row) => {
+  // Load selected PAYE table into the editor and scroll to it
+  const handleEditPaye = (row) => {
+    setEditingPayeId(row.id);
+
     setPayeForm({
-      id: row.id,
-      start_date: fmtDate(row.start_date),
-      end_date: fmtDate(row.end_date || ""),
-      personal_relief: row.personal_relief,
+      start_date: row.start_date, // already YYYY-MM-DD
+      end_date: row.end_date || "",
+      personal_relief: String(row.personal_relief ?? ""),
       insurance_relief_rate: row.insurance_relief_rate ?? "",
       insurance_relief_cap: row.insurance_relief_cap ?? "",
-      bands: row.bands.map(b => ({
-        lower: b.lower,
-        upper: b.upper ?? "",
-        rate: b.rate,
+      bands: (row.bands || []).map((b) => ({
+        id: b.id,
+        lower: String(b.lower ?? ""),
+        upper: b.upper === null || b.upper === undefined ? "" : String(b.upper),
+        rate: String(b.rate ?? ""),
       })),
     });
-    setEditingPayeId(row.id);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    // focus editor
+    formTopRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const deletePaye = async (id) => {
@@ -942,6 +1014,80 @@ export default function PayrollSettingsPage() {
           </tbody>
         </table>
       </div>
+      
+      {/* ---------- AHL Tables (Housing Levy) ---------- */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <h2 className="text-xl font-semibold mb-1">AHL Tables (Housing Levy)</h2>
+        <p className="text-sm text-gray-500 mb-4">Configure Housing Levy (AHL) effective dates, employee/employer rates and optional relief parameters.</p>
+        {ahlErr && (
+          <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{ahlErr}</div>
+        )}
+
+        <form className="mb-6 grid grid-cols-1 md:grid-cols-6 gap-3" onSubmit={submitAhl}>
+          <div>
+            <label className="text-xs text-gray-500">Start Date</label>
+            <input type="date" className="w-full border rounded px-2 py-1" value={ahlForm.start_date} onChange={e => setAhlForm({ ...ahlForm, start_date: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">End Date</label>
+            <input type="date" className="w-full border rounded px-2 py-1" value={ahlForm.end_date} onChange={e => setAhlForm({ ...ahlForm, end_date: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Employee Rate (%)</label>
+            <input type="number" step="0.0001" className="w-full border rounded px-2 py-1" value={ahlForm.employee_rate} onChange={e => setAhlForm({ ...ahlForm, employee_rate: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Employer Rate (%)</label>
+            <input type="number" step="0.0001" className="w-full border rounded px-2 py-1" value={ahlForm.employer_rate} onChange={e => setAhlForm({ ...ahlForm, employer_rate: e.target.value })} required />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Relief Rate (%)</label>
+            <input type="number" step="0.0001" className="w-full border rounded px-2 py-1" value={ahlForm.relief_rate} onChange={e => setAhlForm({ ...ahlForm, relief_rate: e.target.value })} />
+          </div>
+          <div className="md:col-span-6 flex gap-2 justify-end mt-1">
+            {ahlForm.id && (
+              <button type="button" className="px-3 py-1 rounded border" onClick={() => setAhlForm({ id: null, start_date: "", end_date: "", employee_rate: 0.015, employer_rate: 0.015, relief_rate: "", relief_cap_month: "" })}>Cancel</button>
+            )}
+            <button className="px-4 py-1.5 rounded bg-gray-800 text-white">{ahlForm.id ? "Update Table" : "Add Table"}</button>
+          </div>
+        </form>
+
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr className="text-left">
+                  <th className="px-3 py-2">Period</th>
+                  <th className="px-3 py-2">Employee Rate</th>
+                  <th className="px-3 py-2">Employer Rate</th>
+                  <th className="px-3 py-2">Relief</th>
+                  <th className="px-3 py-2 w-28">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ahlRows.length === 0 ? (
+                  <tr><td className="px-3 py-3 text-gray-500" colSpan={5}>No AHL tables yet.</td></tr>
+                ) : (
+                  ahlRows.map((row) => (
+                    <tr key={row.id} className="border-t">
+                      <td className="px-3 py-2">{payeLabel(row)}</td>
+                      <td className="px-3 py-2">{Number(row.employee_rate) * 100}%</td>
+                      <td className="px-3 py-2">{Number(row.employer_rate) * 100}%</td>
+                      <td className="px-3 py-2">{row.relief_rate ? `${Number(row.relief_rate) * 100}% (cap ${row.relief_cap_month})` : "–"}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex gap-2">
+                          <button type="button" className="px-2 py-0.5 rounded border" onClick={() => editAhl(row)}>Edit</button>
+                          <button type="button" className="px-2 py-0.5 rounded border border-red-300 text-red-700" onClick={() => deleteAhl(row.id)}>Del</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
 
       {/* ---------- PAYE Tables ---------- */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
@@ -954,7 +1100,8 @@ export default function PayrollSettingsPage() {
             {payeErr}
           </div>
         )}
-        <form onSubmit={submitPaye} className="mb-6 grid grid-cols-1 md:grid-cols-6 gap-3">
+        <div ref={formTopRef} className="p-4 border rounded mb-4">
+          <form className="mb-6 grid grid-cols-1 md:grid-cols-6 gap-3">
           <div>
             <label className="text-xs text-gray-500">Start Date</label>
             <input type="date" className="w-full border rounded px-2 py-1"
@@ -994,11 +1141,12 @@ export default function PayrollSettingsPage() {
                 Cancel
               </button>
             )}
-            <button className="px-4 py-1.5 rounded bg-gray-800 text-white">
+            <button type="button" className="px-4 py-1.5 rounded bg-gray-800 text-white" onClick={submitPaye}>
               {editingPayeId ? "Update Table" : "Add Table"}
             </button>
           </div>
-        </form>
+          </form>
+        </div>
         {/* Bands input */}
         <div className="mb-4">
           <h4 className="font-semibold mb-2">Bands</h4>
@@ -1076,12 +1224,14 @@ export default function PayrollSettingsPage() {
                       <td className="px-3 py-2">
                         <div className="flex gap-2">
                           <button
+                            type="button"
                             className="px-2 py-0.5 rounded border"
-                            onClick={() => editPaye(row)}
+                            onClick={() => handleEditPaye(row)}
                           >
                             Edit
                           </button>
                           <button
+                            type="button"
                             className="px-2 py-0.5 rounded border border-red-300 text-red-700"
                             onClick={() => deletePaye(row.id)}
                           >

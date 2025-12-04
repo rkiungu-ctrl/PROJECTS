@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models import BankTransaction
+from models.bank_transaction_v2 import BankTransactionV2
 from fastapi.responses import StreamingResponse
 from datetime import date
 import io
@@ -18,11 +18,11 @@ def get_cash_flow(
     end_date: date = Query(None),
     db: Session = Depends(get_db)
 ):
-    query = db.query(BankTransaction)
+    query = db.query(BankTransactionV2)
     if start_date:
-        query = query.filter(BankTransaction.date >= start_date)
+        query = query.filter(BankTransactionV2.date >= start_date)
     if end_date:
-        query = query.filter(BankTransaction.date <= end_date)
+        query = query.filter(BankTransactionV2.date <= end_date)
 
     transactions = query.all()
 
@@ -33,11 +33,11 @@ def get_cash_flow(
     }
 
     for tx in transactions:
-        category = tx.cash_flow_type or "operating"
+        category = getattr(tx, 'cash_flow_type', None) or "operating"
         if category not in totals:
             continue
 
-        if tx.type == 'deposit':
+        if getattr(tx, 'transaction_type', None) == 'receipt':
             totals[category]['inflows'] += tx.amount
         else:
             totals[category]['outflows'] += tx.amount

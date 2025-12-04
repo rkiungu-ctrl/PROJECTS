@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from database import get_db
-from models import BankTransaction, Invoice, JournalEntry, Payroll, Product, JournalLine, Account
+from models import Invoice, JournalEntry, Payroll, Product, JournalLine, Account
 from datetime import datetime, date
 
 router = APIRouter(

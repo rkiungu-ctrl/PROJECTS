@@ -11,16 +11,84 @@ const PayrollEditPage = () => {
 
   // Fetch the payroll detail using the correct endpoint
   useEffect(() => {
-    axios.get(`http://localhost:8000/payrolls/${period}/details/${employeeId}`)
-      .then(res => {
-        setEmployee(res.data);
-        setForm(res.data);
-      })
-      .catch((err) => {
+    let payrollData = null;
+    let empData = null;
+    let latestInc = null;
+
+    const fetchAll = async () => {
+      try {
+  // Normalize period string to YYYY-MM-DD (use first-of-month for YYYY-MM) so backend routes match
+  const normalizedPeriod = /^\d{4}-\d{2}$/.test(period) ? `${period}-01` : period;
+  const res = await axios.get(`http://localhost:8000/payrolls/${normalizedPeriod}/details/${employeeId}`);
+        payrollData = res.data || {};
+        // try to fetch full employee record to prefer master data
+        try {
+          const er = await axios.get(`http://localhost:8000/employees/${payrollData.staff_no || employeeId}`);
+          empData = er.data || {};
+        } catch (e) {
+          empData = null;
+        }
+
+        // try to fetch increments (latest) if employee exists
+        try {
+          const ir = await axios.get(`http://localhost:8000/employees/${payrollData.staff_no || employeeId}/increments`);
+          const incs = ir.data || [];
+          if (incs.length) {
+            // pick most recent by start_date
+            incs.sort((a,b) => new Date(b.start_date) - new Date(a.start_date));
+            latestInc = incs[0];
+          }
+        } catch (e) {
+          latestInc = null;
+        }
+
+        // call the backend preview helper to get auto-prefill values (basic, gross, auto_advance, etc.)
+        let preview = null;
+        try {
+          const staff_no = payrollData.staff_no || employeeId;
+          const pr = await axios.get(`http://localhost:8000/payrolls/preview`, { params: { staff_no, period: normalizedPeriod } });
+          preview = pr.data || null;
+        } catch (e) {
+          // preview is optional; continue with local logic if it fails
+          preview = null;
+        }
+
+        // build initial form values: prefer payroll values, then employee master, then preview, then latest increment
+        const built = {};
+        const pick = (key) => {
+          if (payrollData && payrollData[key] !== undefined && payrollData[key] !== null) return payrollData[key];
+          if (empData && empData[key] !== undefined && empData[key] !== null) return empData[key];
+          // preview keys: basic_salary, gross_pay, auto_advance
+          if (preview) {
+            if (key === 'basic_salary' && preview.basic_salary !== undefined && preview.basic_salary !== null) return preview.basic_salary;
+            if (key === 'advance' && preview.auto_advance !== undefined && preview.auto_advance !== null) return preview.auto_advance;
+          }
+          if (key === 'basic_salary' && latestInc) return latestInc.gross_pay;
+          return 0;
+        };
+
+        built.basic_salary = pick('basic_salary');
+        built.house_allowance = pick('house_allowance');
+        built.transport_allowance = pick('transport_allowance');
+        built.other_allowances = pick('other_allowances');
+        built.commission = pick('commission');
+        built.bonus = pick('bonus');
+        built.non_cash_benefit = pick('non_cash_benefit');
+        built.loan = pick('loan');
+        built.advance = pick('advance');
+        built.gross_pay = (parseFloat(built.basic_salary) || 0) + (parseFloat(built.house_allowance) || 0) + (parseFloat(built.transport_allowance) || 0) + (parseFloat(built.other_allowances) || 0) + (parseFloat(built.commission) || 0) + (parseFloat(built.bonus) || 0);
+
+        setEmployee(empData || payrollData);
+        setForm({ ...built, ...payrollData });
+      } catch (err) {
         console.error(err);
         alert("Failed to fetch employee payslip.");
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAll();
   }, [period, employeeId]);
 
   // Recalculate gross pay when any earning field changes
@@ -28,7 +96,7 @@ const PayrollEditPage = () => {
     const { name, value } = e.target;
     const updatedForm = { ...form, [name]: parseFloat(value) || 0 };
 
-    // Calculate gross pay
+    // Calculate gross pay (cash earnings only - non-cash benefits don't count as received cash)
     const gross =
       (parseFloat(updatedForm.basic_salary) || 0) +
       (parseFloat(updatedForm.house_allowance) || 0) +
@@ -44,10 +112,30 @@ const PayrollEditPage = () => {
 
   const handleSubmit = e => {
     e.preventDefault();
-    axios.put(`http://localhost:8000/payrolls/${period}/details/${employeeId}`, form)
-      .then(() => {
+
+    // Normalize period so backends that expect YYYY-MM-01 will match the row
+    const normalized = /^\d{4}-\d{2}$/.test(period) ? `${period}-01` : period;
+
+    // Ensure staff_no is explicitly included so backend can reliably find the record
+    const body = { ...form, staff_no: (employee && employee.staff_no) || form.staff_no || employeeId };
+
+    axios.put(`http://localhost:8000/payrolls/${normalized}/details/${employeeId}`, body)
+      .then(async () => {
         alert("Payslip updated!");
-        navigate(-1); // Go back to previous page
+
+        // NOTE: Removed sync-loan-repayments call as it was causing duplicate entries.
+        // Payroll update already handles loan deductions via _apply_payroll_to_loans.
+
+        // Tell Loans component (if open) to refresh for this employee
+        try {
+          const staffNo = (employee && employee.staff_no) || form.staff_no || employeeId;
+          window.dispatchEvent(new CustomEvent('loans:refresh', { detail: { staff_no: staffNo } }));
+        } catch (e) {
+          // ignore
+        }
+
+        // Go back to the View Payslips page for the (normalized) period so the user sees updated data
+        navigate(`/payroll/${normalized}`);
       })
       .catch(() => alert("Failed to update payslip."));
   };
@@ -82,6 +170,10 @@ const PayrollEditPage = () => {
         <div>
           <label>Bonus</label>
           <input type="number" name="bonus" value={form.bonus || ""} onChange={handleChange} className="border px-2 py-1 rounded w-full" />
+        </div>
+        <div>
+          <label>Non-Cash Benefit</label>
+          <input type="number" name="non_cash_benefit" value={form.non_cash_benefit || ""} onChange={handleChange} className="border px-2 py-1 rounded w-full" />
         </div>
         <div>
           <label>Loan</label>

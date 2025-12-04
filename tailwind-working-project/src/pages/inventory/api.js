@@ -79,7 +79,7 @@ export async function deleteInventoryItem(id) {
  * Fetch all products.
  */
 export async function getProducts() {
-    const res = await fetch("http://127.0.0.1:8000/products/");
+    const res = await fetch(`${API_BASE}/products/`);
     if (!res.ok) throw new Error("Failed to fetch products");
     return res.json();
 }
@@ -89,7 +89,7 @@ export async function getProducts() {
  * @param {Object} productData
  */
 export async function createProduct(productData) {
-    const res = await fetch("http://127.0.0.1:8000/products/", {
+    const res = await fetch(`${API_BASE}/products/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(productData),
@@ -103,7 +103,7 @@ export async function createProduct(productData) {
  * @param {string|number} id
  */
 export async function getProduct(id) {
-    const res = await fetch(`http://127.0.0.1:8000/products/${id}`);
+    const res = await fetch(`${API_BASE}/products/${id}`);
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
 }
@@ -114,7 +114,7 @@ export async function getProduct(id) {
  * @param {Object} data
  */
 export async function updateProduct(id, data) {
-    const res = await fetch(`http://127.0.0.1:8000/products/${id}`, {
+    const res = await fetch(`${API_BASE}/products/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

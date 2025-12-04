@@ -1,6 +1,7 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { formatDateDDMMYYYY } from "../utils/dateUtils";
 
 const API_BASE = "http://127.0.0.1:8000";
 const GET_PROFILE = `${API_BASE}/company/profile`;
@@ -64,26 +65,43 @@ export default function Dashboard() {
 
     const fetchProfile = fetch(GET_PROFILE).then((res) => res.json());
 
-    const fetchRevenue = fetch(`${API_BASE}/invoices/summary?${q}`)
+    const fetchDashboardSummary = fetch(`${API_BASE}/reports/dashboard-summary?${q}`)
       .then((res) => res.json())
-      .then((data) => setRevenue(data.total_revenue || 0))
+      .then((data) => {
+        setRevenue(data.revenue || 0);
+        setEmploymentCosts(data.expenses || 0); // this state now means "total expenses"
+      })
       .catch(() =>
-        setErrors((e) => ({ ...e, invoices: "Invoices summary unavailable." }))
+        setErrors((e) => ({
+          ...e,
+          invoices: "Dashboard summary (revenue/expenses) unavailable.",
+        }))
       );
 
-    const fetchPayroll = fetch(`${API_BASE}/payrolls/summary?${q}`)
-      .then((res) => res.json())
-      .then((data) => setEmploymentCosts(data.employment_costs || 0))
-      .catch(() =>
-        setErrors((e) => ({ ...e, payrolls: "Payroll summary unavailable." }))
-      );
-
-    const fetchCash = fetch(`${API_BASE}/bank_transactions/summary?${q}`)
-      .then((res) => res.json())
-      .then((data) => setCashBalance(data.cash_balance || 0))
-      .catch(() =>
-        setErrors((e) => ({ ...e, bank: "Bank summary unavailable." }))
-      );
+    const fetchCash = (async () => {
+      // Try the odd double-prefixed route first (keeps compatibility with router declared as
+      // prefix="/bank_transactions" and then route "/bank_transactions/summary").
+      try {
+        const res = await fetch(`${API_BASE}/bank_transactions/bank_transactions/summary?${q}`);
+        if (!res.ok) throw new Error("first-path-failed");
+        const data = await res.json();
+        setCashBalance(data.cash_balance ?? data?.balance ?? 0);
+        return;
+      } catch (e1) {
+        // Fallback to the expected single-prefixed route
+        try {
+          const res2 = await fetch(`${API_BASE}/bank_transactions/summary?${q}`);
+          if (!res2.ok) throw new Error("second-path-failed");
+          const data2 = await res2.json();
+          setCashBalance(data2.cash_balance ?? data2?.balance ?? 0);
+          return;
+        } catch (e2) {
+          setErrors((e) => ({ ...e, bank: "Bank summary unavailable." }));
+          // rethrow so callers (Promise.allSettled) see a rejection
+          throw e2;
+        }
+      }
+    })();
 
     // NEW: fetch recent activity
     const fetchActivity = fetch(`${API_BASE}/activity/recent?${q}`)
@@ -96,8 +114,7 @@ export default function Dashboard() {
 
     Promise.allSettled([
       fetchProfile,
-      fetchRevenue,
-      fetchPayroll,
+      fetchDashboardSummary,
       fetchCash,
       fetchActivity,
     ]).then(([profileResult]) => {
@@ -197,11 +214,11 @@ export default function Dashboard() {
               hint={errors.invoices}
             />
             <KpiCard
-              label="Employment Costs"
+              label="Total Expenses"
               value={formatKES(employmentCosts)}
               color="text-rose-600"
-              to="/payroll"
-              hint={errors.payrolls}
+              to="/reports"
+              hint={errors.invoices}
             />
             <KpiCard
               label="Net Profit"
@@ -337,7 +354,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    <span className="text-gray-500">{a.date}</span>
+                    <span className="text-gray-500">{formatDateDDMMYYYY(a.date)}</span>
                     <span className="font-semibold">
                       {`KES ${Number(a.amount || 0).toLocaleString()}`}
                     </span>

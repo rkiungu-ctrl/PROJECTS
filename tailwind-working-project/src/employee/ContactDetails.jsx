@@ -1,97 +1,65 @@
+// src/employee/ContactDetails.jsx
 import React, { useState } from "react";
 import { api } from "../lib/api";
 
-const ContactDetails = ({ formData, setFormData, staffNo }) => {
+const ContactDetails = ({ formData, setFormData }) => {
   const form = formData.contact || {};
-  const [newKin, setNewKin] = useState({ name: "", relation: "", phone: "", email: "" });
+
+  const [newKin, setNewKin] = useState({
+    name: "",
+    relation: "",
+    phone: "",
+    email: "",
+    dob: "",
+    sex: "",
+  });
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    const updated = { ...form, [name]: name === "disability_exemption_amount" && value === "" ? null : value };
-    setFormData((prev) => ({ ...prev, contact: updated }));
+    setFormData((prev) => ({
+      ...prev,
+      contact: { ...(prev.contact || {}), [name]: value },
+    }));
   };
 
-  const handleKinChange = (e) => {
+  const handleNewKinChange = (e) => {
     const { name, value } = e.target;
     setNewKin((prev) => ({ ...prev, [name]: value }));
   };
 
   const addKin = () => {
-    if (!newKin.name) return;
-    const updated = { ...form, next_of_kin: [...(form.next_of_kin || []), newKin] };
-    setFormData((prev) => ({ ...prev, contact: updated }));
-    setNewKin({ name: "", relation: "", phone: "", email: "" });
+    if (!newKin.name.trim()) return;
+    setFormData((prev) => ({
+      ...prev,
+      contact: {
+        ...(prev.contact || {}),
+        next_of_kin: [...(prev.contact?.next_of_kin || []), newKin],
+      },
+    }));
+    setNewKin({ name: "", relation: "", phone: "", email: "", dob: "", sex: "" });
   };
 
   const removeKin = (idx) => {
-    const updatedKin = (form.next_of_kin || []).filter((_, i) => i !== idx);
-    const updated = { ...form, next_of_kin: updatedKin };
-    setFormData((prev) => ({ ...prev, contact: updated }));
+    setFormData((prev) => {
+      const list = [...(prev.contact?.next_of_kin || [])];
+      list.splice(idx, 1);
+      return { ...prev, contact: { ...(prev.contact || {}), next_of_kin: list } };
+    });
   };
 
-  const [kinMessage, setKinMessage] = useState("");
-  const saveNextOfKin = async () => {
-    setKinMessage("");
-    try {
-      await api.put(
-        `/employees/${staffNo}/next_of_kin`,
-        JSON.stringify(form.next_of_kin),
-        { headers: { "Content-Type": "text/plain" } }
-      );
-      setKinMessage("Next of kin saved successfully");
-    } catch (e) {
-      setKinMessage(`Failed: ${e?.response?.data ? JSON.stringify(e.response.data) : "Unknown error"}`);
-    }
+  const updateKinField = (idx, field, value) => {
+    setFormData((prev) => {
+      const list = [...(prev.contact?.next_of_kin || [])];
+      list[idx] = { ...(list[idx] || {}), [field]: value };
+      return { ...prev, contact: { ...(prev.contact || {}), next_of_kin: list } };
+    });
   };
 
-  const [contactMessage, setContactMessage] = useState("");
-  const saveContactDetails = async () => {
-    setContactMessage("");
-    try {
-      const contactData = new FormData();
-      // Only append fields the user actually provided to avoid overwriting existing DB values with blanks
-      const appendIf = (k, v) => {
-        if (v !== undefined && v !== null && String(v).trim() !== "") contactData.append(k, v);
-      };
-      appendIf("personal_email", form.personal_email);
-      appendIf("official_email", form.official_email);
-      appendIf("phone", form.phone);
-      appendIf("office_phone", form.office_phone);
-      appendIf("country", form.country);
-      appendIf("address", form.address);
-      appendIf("city", form.city);
-      appendIf("county", form.county);
-      appendIf("postal_code", form.postal_code);
-
-      await api.put(`/employees/${staffNo || form.staff_no}/contact`, contactData);
-      setContactMessage("Contact details saved successfully");
-
-      // Refresh only contact-related fields from the server to avoid polluting the contact object
-      const res = await api.get(`/employees/${staffNo || form.staff_no}`);
-      const remote = res.data || {};
-      setFormData((prev) => ({
-        ...prev,
-        contact: {
-          ...prev.contact,
-          personal_email: remote.personal_email ?? prev.contact.personal_email,
-          official_email: remote.official_email ?? prev.contact.official_email,
-          phone: remote.phone ?? prev.contact.phone,
-          office_phone: remote.office_phone ?? prev.contact.office_phone,
-          country: remote.country ?? prev.contact.country,
-          address: remote.address ?? prev.contact.address,
-          city: remote.city ?? prev.contact.city,
-          county: remote.county ?? prev.contact.county,
-          postal_code: remote.postal_code ?? prev.contact.postal_code,
-          next_of_kin: Array.isArray(remote.next_of_kin) ? remote.next_of_kin : prev.contact.next_of_kin,
-        },
-      }));
-    } catch (e) {
-      setContactMessage(`Failed: ${e?.response?.data ? JSON.stringify(e.response.data) : "Unknown error"}`);
-    }
-  };
+  const nok = Array.isArray(form.next_of_kin) ? form.next_of_kin : [];
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="max-w-5xl mx-auto space-y-5">
+      {/* Contact fields */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium">Personal Email</label>
@@ -128,7 +96,15 @@ const ContactDetails = ({ formData, setFormData, staffNo }) => {
         </div>
 
         <div>
-          <label className="block text-sm font-medium">Address</label>
+          <label className="block text-sm font-medium">Country</label>
+          <input
+            name="country"
+            value={form.country || ""}
+            onChange={handleChange}
+            className="mt-1 w-full border rounded p-2"
+          />
+
+          <label className="block text-sm font-medium mt-3">Address</label>
           <input
             name="address"
             value={form.address || ""}
@@ -162,59 +138,60 @@ const ContactDetails = ({ formData, setFormData, staffNo }) => {
         </div>
       </div>
 
-      {/* Next of kin list and controls */}
-      <div className="border-t pt-4">
-        <h3 className="font-semibold mb-2">Next of Kin</h3>
+      {/* Next of Kin section */}
+      <div>
+        <h3 className="text-base font-semibold mb-2">Next of Kin</h3>
+
+        <div className="grid grid-cols-12 gap-2 mb-2">
+          <input className="col-span-3 border rounded p-2" placeholder="Name" name="name" value={newKin.name} onChange={handleNewKinChange} />
+          <input className="col-span-2 border rounded p-2" placeholder="Relation" name="relation" value={newKin.relation} onChange={handleNewKinChange} />
+          <input className="col-span-2 border rounded p-2" placeholder="Phone" name="phone" value={newKin.phone} onChange={handleNewKinChange} />
+          <input className="col-span-2 border rounded p-2" placeholder="Email" name="email" value={newKin.email} onChange={handleNewKinChange} />
+          <input className="col-span-2 border rounded p-2" type="date" name="dob" value={newKin.dob} onChange={handleNewKinChange} />
+          <select className="col-span-1 border rounded p-2" name="sex" value={newKin.sex} onChange={handleNewKinChange}>
+            <option value="">Sex</option><option>Male</option><option>Female</option><option>Other</option>
+          </select>
+          <button type="button" onClick={addKin} className="col-span-12 md:col-span-1 bg-blue-600 text-white rounded px-3">
+            Add
+          </button>
+        </div>
+
         <div className="overflow-x-auto">
-          <table className="w-full table-auto border-collapse">
-            <thead>
-              <tr className="text-left">
-                <th className="p-2">Name</th>
-                <th className="p-2">Relation</th>
-                <th className="p-2">Phone</th>
-                <th className="p-2">Email</th>
-                <th className="p-2"> </th>
+          <table className="min-w-full border">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-2 border">Name</th>
+                <th className="text-left p-2 border">Relation</th>
+                <th className="text-left p-2 border">Phone</th>
+                <th className="text-left p-2 border">Email</th>
+                <th className="text-left p-2 border">DOB</th>
+                <th className="text-left p-2 border">Sex</th>
+                <th className="p-2 border"></th>
               </tr>
             </thead>
             <tbody>
-              {(form.next_of_kin || []).map((k, i) => (
-                <tr key={i} className="bg-gray-50 border-b">
-                  <td className="p-2"><input className="w-full border rounded p-1" value={k.name || ""} onChange={(e) => {
-                    const updated = [...(form.next_of_kin || [])]; updated[i] = { ...updated[i], name: e.target.value }; setFormData((prev) => ({ ...prev, contact: { ...prev.contact, next_of_kin: updated } }));
-                  }} /></td>
-                  <td className="p-2"><input className="w-full border rounded p-1" value={k.relation || ""} onChange={(e) => {
-                    const updated = [...(form.next_of_kin || [])]; updated[i] = { ...updated[i], relation: e.target.value }; setFormData((prev) => ({ ...prev, contact: { ...prev.contact, next_of_kin: updated } }));
-                  }} /></td>
-                  <td className="p-2"><input className="w-full border rounded p-1" value={k.phone || ""} onChange={(e) => {
-                    const updated = [...(form.next_of_kin || [])]; updated[i] = { ...updated[i], phone: e.target.value }; setFormData((prev) => ({ ...prev, contact: { ...prev.contact, next_of_kin: updated } }));
-                  }} /></td>
-                  <td className="p-2"><input className="w-full border rounded p-1" value={k.email || ""} onChange={(e) => {
-                    const updated = [...(form.next_of_kin || [])]; updated[i] = { ...updated[i], email: e.target.value }; setFormData((prev) => ({ ...prev, contact: { ...prev.contact, next_of_kin: updated } }));
-                  }} /></td>
-                  <td className="p-2 text-right"><button className="text-red-600 font-bold" onClick={() => removeKin(i)}>✕</button></td>
+              {nok.length === 0 && (
+                <tr><td className="p-2 text-center text-gray-500 border" colSpan={7}>No next of kin added yet.</td></tr>
+              )}
+              {nok.map((k, idx) => (
+                <tr key={idx} className="odd:bg-white even:bg-gray-50">
+                  <td className="p-1 border"><input className="w-full p-1 border rounded" value={k.name || ""} onChange={(e) => updateKinField(idx, "name", e.target.value)} /></td>
+                  <td className="p-1 border"><input className="w-full p-1 border rounded" value={k.relation || ""} onChange={(e) => updateKinField(idx, "relation", e.target.value)} /></td>
+                  <td className="p-1 border"><input className="w-full p-1 border rounded" value={k.phone || ""} onChange={(e) => updateKinField(idx, "phone", e.target.value)} /></td>
+                  <td className="p-1 border"><input className="w-full p-1 border rounded" value={k.email || ""} onChange={(e) => updateKinField(idx, "email", e.target.value)} /></td>
+                  <td className="p-1 border"><input type="date" className="w-full p-1 border rounded" value={k.dob || ""} onChange={(e) => updateKinField(idx, "dob", e.target.value)} /></td>
+                  <td className="p-1 border">
+                    <select className="w-full p-1 border rounded" value={k.sex || ""} onChange={(e) => updateKinField(idx, "sex", e.target.value)}>
+                      <option value=""></option><option>Male</option><option>Female</option><option>Other</option>
+                    </select>
+                  </td>
+                  <td className="p-1 border text-right">
+                    <button type="button" className="text-red-600 hover:underline" onClick={() => removeKin(idx)}>Remove</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
-          <input name="name" value={newKin.name} onChange={handleKinChange} placeholder="Name" className="border rounded p-2" />
-          <input name="relation" value={newKin.relation} onChange={handleKinChange} placeholder="Relation" className="border rounded p-2" />
-          <input name="phone" value={newKin.phone} onChange={handleKinChange} placeholder="Phone" className="border rounded p-2" />
-          <input name="email" value={newKin.email} onChange={handleKinChange} placeholder="Email" className="border rounded p-2" />
-        </div>
-        <div className="flex gap-2 mt-2">
-          <button type="button" className="bg-blue-600 text-white px-4 py-2 rounded" onClick={addKin}>Add NOK</button>
-          {kinMessage && <div className={`ml-3 mt-2 text-sm ${kinMessage.includes('success') ? 'text-green-600' : 'text-red-600'}`}>{kinMessage}</div>}
-        </div>
-      </div>
-
-      {/* Save contact details */}
-      <div className="pt-4 border-t">
-        <div className="flex items-center gap-3">
-          {/* Use modal's Update Employee button to persist contact + NOK changes */}
-          {contactMessage && <div className={`text-sm ${contactMessage.includes('success') ? 'text-green-600' : 'text-red-600'}`}>{contactMessage}</div>}
         </div>
       </div>
     </div>

@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 const defaultTypes = ["NSSF", "NHIF", "PAYE", "Other"];
 const emptyDeduction = { type: "", amount: "", recurring: false };
 
-const Deductions = ({ formData, setFormData }) => {
+const Deductions = ({ staffNo, formData, setFormData }) => {
   const deductions = formData.deductions || [];
   const [editingIdx, setEditingIdx] = useState(null);
   const [form, setForm] = useState(emptyDeduction);
@@ -14,10 +14,14 @@ const Deductions = ({ formData, setFormData }) => {
   const [newType, setNewType] = useState("");
   const [dirty, setDirty] = useState(false);
 
+  // paid-to-date aggregates per deduction type (e.g. { NSSF: 12000, PAYE: 300000 })
+  const [paidToDate, setPaidToDate] = useState({});
+
   // payroll settings
   const [shif, setShif] = useState(null);
   const [nssfPeriods, setNssfPeriods] = useState([]);
   const [payeTables, setPayeTables] = useState([]);
+  const [ahlTables, setAhlTables] = useState([]);
   const [nhifBands, setNhifBands] = useState([]);
 
   useEffect(() => {
@@ -26,21 +30,64 @@ const Deductions = ({ formData, setFormData }) => {
 
   const fetchSettings = async () => {
     try {
-      const [{ data: shifData }, { data: nssfData }, { data: payeData }, { data: nhifData }] = await Promise.all([
+      const [{ data: shifData }, { data: nssfData }, { data: payeData }, { data: nhifData }, { data: ahlData }] = await Promise.all([
         api.get("/payroll-settings/shif/"),
         api.get("/payroll-settings/nssf/"),
         api.get("/payroll-settings/paye"),
         api.get("/payroll-settings/nhif/"),
+        api.get("/payroll-settings/ahl/"),
       ]);
       setShif(shifData?.[0] ?? null);
       setNssfPeriods(nssfData || []);
       setPayeTables(payeData || []);
       setNhifBands(nhifData || []);
+      setAhlTables(ahlData || []);
     } catch (e) {
       // swallow — it's non-fatal; component will fallback to defaults
       console.warn("Failed to load payroll settings", e);
     }
   };
+
+  useEffect(() => {
+    if (!staffNo) return;
+    (async () => {
+      try {
+        // Try payslips first, fallback to payrolls
+        const tryEndpoints = [
+          `/payslips/?staff_no=${encodeURIComponent(staffNo)}`,
+          `/payrolls/?staff_no=${encodeURIComponent(staffNo)}`,
+        ];
+        let rows = [];
+        for (const ep of tryEndpoints) {
+          try {
+            const { data } = await api.get(ep);
+            if (Array.isArray(data) && data.length) {
+              rows = data;
+              break;
+            }
+          } catch {}
+        }
+
+        const totals = {};
+        for (const r of rows) {
+          const add = (k, v) => {
+            totals[k] = (totals[k] || 0) + (Number(v || 0));
+          };
+          add("NSSF", r.nssf);
+          add("PAYE", r.paye);
+          add("SHIF", r.shif);
+          add("NHIF", r.nhif);
+          add("AHL", r.ahl);
+          if (Array.isArray(r.other_deductions)) {
+            for (const od of r.other_deductions) add(od.type || "Other", od.amount);
+          }
+        }
+        setPaidToDate(totals);
+      } catch {
+        setPaidToDate({});
+      }
+    })();
+  }, [staffNo]);
 
   // Compute gross pay from formData (basic + allowances + commission/bonus)
   const gross = useMemo(() => {
@@ -57,10 +104,30 @@ const Deductions = ({ formData, setFormData }) => {
   const statutoryRows = useMemo(() => {
     const rows = [];
 
-    // AHL (Housing Levy) - default 1.5% (server uses 0.015)
-    const ahlRate = 0.015;
-    const ahl = Math.round(gross * ahlRate * 100) / 100;
-    rows.push({ type: "AHL", amount: ahl, recurring: true });
+    // AHL (Housing Levy) - pick table by period and compute employee deduction
+    const pickAHL = (activeDate, tables) => {
+      if (!tables || !tables.length) return null;
+      const d = new Date(activeDate || Date.now());
+      const hits = (tables || []).filter((t) => {
+        const s = new Date(t.start_date);
+        const e = t.end_date ? new Date(t.end_date) : null;
+        return d >= s && (!e || d <= e);
+      });
+      if (hits.length) return hits.sort((a, b) => a.start_date.localeCompare(b.start_date)).pop();
+      return (tables || []).slice(-1)[0];
+    };
+
+    const ahlTable = pickAHL(formData.period_end || formData.pay_date || null, ahlTables);
+    const employeeRate = Number(ahlTable?.employee_rate ?? 0.015);
+    const ahlEmployee = Math.round(gross * employeeRate * 100) / 100;
+    rows.push({ type: "AHL", amount: ahlEmployee, recurring: true });
+
+    // compute AHL relief if present on table
+    let ahlRelief = 0;
+    if (ahlTable?.relief_rate) {
+      const cap = Number(ahlTable?.relief_cap_month || 0);
+      ahlRelief = Math.min(ahlEmployee * Number(ahlTable.relief_rate), cap || Infinity);
+    }
 
     // SHIF - use setting rate/cap if available, otherwise fallback to 0.0275 with min cap 300 or fixed 1700 pre-2024
     if (shif) {
@@ -89,7 +156,7 @@ const Deductions = ({ formData, setFormData }) => {
     if (payeTables && payeTables.length > 0) {
       const table = payeTables[payeTables.length - 1] || payeTables[0];
       const bands = table.bands || [];
-      let taxable = gross - ahl - (rows.find(r => r.type === "SHIF")?.amount || 0) - (rows.find(r => r.type === "NSSF")?.amount || 0);
+  let taxable = gross - (rows.find(r => r.type === "AHL")?.amount || 0) - (rows.find(r => r.type === "SHIF")?.amount || 0) - (rows.find(r => r.type === "NSSF")?.amount || 0);
       // compute paye using bands
       let paye = 0;
       for (const b of bands) {
@@ -100,16 +167,18 @@ const Deductions = ({ formData, setFormData }) => {
         if (slice > 0) paye += slice * Number(b.rate || 0);
         if (taxable <= upper) break;
       }
-      const relief = Number(table.personal_relief || 0);
-      paye = Math.max(paye - relief, 0);
+  const relief = Number(table.personal_relief || 0) + ahlRelief;
+  paye = Math.max(paye - relief, 0);
       paye = Math.round(paye * 100) / 100;
       rows.push({ type: "PAYE", amount: paye, recurring: true });
     } else {
       // fallback: simple rule 10% of taxable up to first tier (best-effort)
-      const shifAmt = rows.find(r => r.type === "SHIF")?.amount || 0;
-      const nssfAmt = rows.find(r => r.type === "NSSF")?.amount || 0;
-      const taxable = Math.max(gross - ahl - shifAmt - nssfAmt, 0);
-      const paye = Math.round(taxable * 0.1 * 100) / 100;
+  const shifAmt = rows.find(r => r.type === "SHIF")?.amount || 0;
+  const nssfAmt = rows.find(r => r.type === "NSSF")?.amount || 0;
+  // fallback: use computed AHL amount from statutory rows (avoid undefined `ahl` variable)
+  const ahlAmt = rows.find(r => r.type === "AHL")?.amount || 0;
+  const taxable = Math.max(gross - ahlAmt - shifAmt - nssfAmt, 0);
+  const paye = Math.round(taxable * 0.1 * 100) / 100;
       rows.push({ type: "PAYE", amount: paye, recurring: true });
     }
 
@@ -186,23 +255,66 @@ const Deductions = ({ formData, setFormData }) => {
             <th className="border px-2 py-1">Type</th>
             <th className="border px-2 py-1">Amount</th>
             <th className="border px-2 py-1">Recurring</th>
+            <th className="border px-2 py-1">Paid to Date</th>
             <th className="border px-2 py-1">Actions</th>
           </tr>
         </thead>
         <tbody>
           {/* Statutory deductions (read-only computed) */}
-          {statutoryRows.map((d) => (
-            <tr key={d.type} className="bg-gray-50">
-              <td className="border px-2 py-1 font-semibold">{d.type}</td>
-              <td className="border px-2 py-1">{d.amount?.toLocaleString?.() ?? d.amount}</td>
-              <td className="border px-2 py-1">{d.recurring ? "Yes" : "No"}</td>
-              <td className="border px-2 py-1 text-gray-400">—</td>
-            </tr>
-          ))}
+          {statutoryRows.map((d) => {
+            // Determine effective amount based on employee flags and income_tax
+            const incomeTax = String(formData?.income_tax || formData?.salary?.income_tax || "").toLowerCase();
+            const employmentType = String(formData?.employment_type || formData?.salary?.employment_type || "").toLowerCase();
+            const deductShif = !!(formData?.deduct_shif || formData?.salary?.deduct_shif);
+            const deductNssf = !!(formData?.deduct_nssf || formData?.salary?.deduct_nssf);
+            const deductAhl = !!(formData?.deduct_housing_levy || formData?.salary?.deduct_housing_levy);
+
+            let effective = d.amount || 0;
+            let disabled = false;
+            if ((d.type || "").toUpperCase() === "PAYE") {
+              // PAYE should be driven by income_tax. If income_tax indicates Exempt or Withholding, zero it.
+              if (incomeTax.includes("exempt") || incomeTax.includes("withholding")) {
+                effective = 0;
+                disabled = true;
+              }
+              // also treat interns (when not explicitly overridden in salary) as exempt visually
+              if (employmentType.includes("intern") && !incomeTax) {
+                effective = 0;
+                disabled = true;
+              }
+            } else if ((d.type || "").toUpperCase() === "SHIF") {
+              if (!deductShif) {
+                effective = 0;
+                disabled = true;
+              }
+            } else if ((d.type || "").toUpperCase() === "NSSF") {
+              if (!deductNssf) {
+                effective = 0;
+                disabled = true;
+              }
+            } else if ((d.type || "").toUpperCase() === "AHL" || (d.type || "").toUpperCase() === "HOUSING") {
+              if (!deductAhl) {
+                effective = 0;
+                disabled = true;
+              }
+            }
+
+            const cls = disabled ? "border px-2 py-1 text-gray-400" : "border px-2 py-1";
+
+            return (
+              <tr key={d.type} className={disabled ? "bg-gray-50" : "bg-white"}>
+                <td className="border px-2 py-1 font-semibold">{d.type}</td>
+                <td className={cls}>{effective?.toLocaleString?.() ?? effective}</td>
+                <td className="border px-2 py-1">{d.recurring ? "Yes" : "No"}</td>
+                <td className="border px-2 py-1">{(paidToDate[d.type] || 0).toLocaleString()}</td>
+                <td className="border px-2 py-1 text-gray-400">{disabled ? "Disabled by employee settings" : "—"}</td>
+              </tr>
+            );
+          })}
           {/* Custom deductions */}
           {deductions.length === 0 ? (
             <tr>
-              <td colSpan={4} className="border px-2 py-2 text-center text-gray-500">No custom deductions</td>
+              <td colSpan={5} className="border px-2 py-2 text-center text-gray-500">No custom deductions</td>
             </tr>
           ) : (
             deductions.map((b, idx) => (
@@ -210,6 +322,7 @@ const Deductions = ({ formData, setFormData }) => {
                 <td className="border px-2 py-1">{b.type}</td>
                 <td className="border px-2 py-1">{b.amount}</td>
                 <td className="border px-2 py-1">{b.recurring ? "Yes" : "No"}</td>
+                <td className="border px-2 py-1">{(paidToDate[b.type] || 0).toLocaleString()}</td>
                 <td className="border px-2 py-1">
                   <button className="text-blue-600 underline mr-2" onClick={() => handleEdit(idx)}>Edit</button>
                   <button className="text-red-600 underline" onClick={() => handleDelete(idx)}>Delete</button>

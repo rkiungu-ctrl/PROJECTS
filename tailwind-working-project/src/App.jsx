@@ -24,10 +24,15 @@ import PendingRecurringInvoices from "./pages/Purchases/PendingRecurringInvoices
 
 
 // Banking
-import BankBalances from "./pages/BankBalances";
-import BankAccountDetail from "./pages/BankAccountDetail";
-import ReceiptList from "./pages/ReceiptList";
-import Payments from "./pages/Payments"; 
+import BankAccountsDashboard from "./pages/bank/BankAccountsDashboard";
+import BankAccountView from "./pages/bank/BankAccountView";
+import BankAccountEdit from "./pages/bank/BankAccountEdit";
+import BankStatements from "./pages/bank/BankStatements";
+import BankPaymentsPage from "./pages/bank/BankPaymentsPage";
+import NewBankPayment from "./pages/bank/NewBankPayment";
+import BankPaymentView from "./pages/bank/BankPaymentView";
+import BankRulesPage from "./pages/bank/BankRulesPage";
+import BankStatementImport from "./pages/BankStatementImport";
 
 // Accounting
 import Accounts from "./pages/Accounts";
@@ -84,12 +89,19 @@ function App() {
           <Route path="/purchases/:id/edit" element={<PurchaseForm />} />
 
           {/* Banking */}
-          <Route path="/bank-balances" element={<BankBalances />} />
-          <Route path="/bank-balances/:accountCode" element={<BankAccountDetail />} />
-          <Route path="/receipts" element={<ReceiptList />} />
-          <Route path="/payments" element={<Payments />} />
-          <Route path="/payments/new" element={<Payments />} />
-
+          <Route path="/payments/new" element={<NewBankPayment />} />
+          <Route path="/bank-payments" element={<BankPaymentsPage />} />
+          <Route path="/bank-payments/new" element={<NewBankPayment />} />
+          <Route path="/bank-payments/:id" element={<BankPaymentView />} />
+          <Route path="/bank-accounts" element={<BankAccountsDashboard />} />
+          <Route path="/bank-accounts/:id" element={<BankAccountView />} />
+          {/* legacy singular statement route removed; use /bank-accounts/:id/statements */}
+          <Route path="/bank-accounts/:id/statements" element={<BankStatements />} />
+          <Route path="/bank-accounts/import" element={<BankStatementImport />} />
+          <Route path="/bank-accounts/:accountId/edit" element={<BankAccountEdit />} />
+          <Route path="/bank-payments/:id/edit" element={<NewBankPayment />} />
+          <Route path="/bank-rules" element={<BankRulesPage />} />
+          
           {/* Accounting (now includes Journal) */}
           <Route path="/chart_of_accounts" element={<Accounts />} />
           <Route path="/journal-entry" element={<JournalEntryForm />} /> {/* under Accounts */}
@@ -100,6 +112,8 @@ function App() {
           <Route path="/payroll" element={<PayrollPage />} />
           <Route path="/payroll/single" element={<AddSinglePayroll />} />
           <Route path="/payroll/:period" element={<ViewPayslips />} />
+          {/* Backwards-compatible route used by PayrollTab 'View Payslips' links */}
+          <Route path="/payrolls/:period/payslips" element={<ViewPayslips />} />
           <Route path="/payrolls/:period/edit/:employeeId" element={<PayrollEditPage />} />
           <Route path="/payroll-settings" element={<PayrollSettingsPage />} />
 

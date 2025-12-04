@@ -1,9 +1,9 @@
 // src/services/api.js (purchases-focused helpers)
 
 // ------------------------------
-// Base URLs
+// Base URLs (centralized)
 // ------------------------------
-export const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 export const PURCHASES_BASE = `${API_BASE}/purchases`;
 
 // ------------------------------

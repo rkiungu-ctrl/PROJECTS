@@ -140,21 +140,21 @@ const Benefits = ({ data = {}, onChange, formData, setFormData }) => {
           type="text"
           placeholder="Type (e.g. Medical)"
           value={formData.benefitType || ""}
-          onChange={e => setFormData && setFormData({ ...formData, benefitType: e.target.value })}
+          onChange={e => setFormData && setFormData(prev => ({ ...prev, benefitType: e.target.value }))}
           className="border px-2 py-1 rounded"
         />
         <input
           type="number"
           placeholder="Amount"
           value={formData.benefitAmount || ""}
-          onChange={e => setFormData && setFormData({ ...formData, benefitAmount: e.target.value })}
+          onChange={e => setFormData && setFormData(prev => ({ ...prev, benefitAmount: e.target.value }))}
           className="border px-2 py-1 rounded w-24"
         />
         <label className="flex items-center gap-1">
           <input
             type="checkbox"
             checked={formData.benefitRecurring || false}
-            onChange={e => setFormData && setFormData({ ...formData, benefitRecurring: e.target.checked })}
+            onChange={e => setFormData && setFormData(prev => ({ ...prev, benefitRecurring: e.target.checked }))}
           />
           Recurring
         </label>

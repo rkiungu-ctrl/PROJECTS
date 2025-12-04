@@ -3,11 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from datetime import date, timedelta, datetime
+from io import BytesIO
 
 from database import get_db
-import models
-from models.purchase_invoice import PurchaseInvoice
+from models.purchase_invoice import PurchaseInvoice, PurchaseInvoiceLine
 from models.stock_entry import StockEntry
+import models  # Keep for other models like Supplier, Product, Tax
 from schemas.purchase_invoice import (
     PurchaseInvoiceCreate,
     PurchaseInvoiceUpdate,
@@ -17,6 +18,51 @@ from schemas.purchase_invoice import (
 router = APIRouter(prefix="/purchases", tags=["Purchases"])
 
 # -------------------- Helpers --------------------
+
+def calculate_next_issue_date(current_date: date, recurrence_interval: str) -> date:
+    """Calculate the next issue date based on current date and recurrence interval"""
+    if not recurrence_interval:
+        return current_date
+    
+    # Parse common formats: "1 months", "monthly", "3 months", etc.
+    interval_lower = recurrence_interval.lower().strip()
+    
+    if "month" in interval_lower:
+        if "monthly" in interval_lower or interval_lower == "1 months" or interval_lower == "1 month":
+            months = 1
+        else:
+            # Extract number from patterns like "3 months"
+            import re
+            match = re.search(r'(\d+)\s*months?', interval_lower)
+            months = int(match.group(1)) if match else 1
+        
+        # Add months to current date
+        new_month = current_date.month + months
+        new_year = current_date.year
+        while new_month > 12:
+            new_month -= 12
+            new_year += 1
+        
+        # Handle day overflow (e.g., Jan 31 + 1 month = Feb 28/29)
+        import calendar
+        max_day = calendar.monthrange(new_year, new_month)[1]
+        new_day = min(current_date.day, max_day)
+        
+        return date(new_year, new_month, new_day)
+    
+    elif "year" in interval_lower:
+        years = 1
+        if "12 months" in interval_lower:
+            years = 1
+        else:
+            import re
+            match = re.search(r'(\d+)\s*years?', interval_lower)
+            years = int(match.group(1)) if match else 1
+        return date(current_date.year + years, current_date.month, current_date.day)
+    
+    else:
+        # Default to 1 month if format not recognized
+        return calculate_next_issue_date(current_date, "1 months")
 
 def parse_date(date_str):
     if isinstance(date_str, date):
@@ -32,9 +78,10 @@ def get_tax_options(db: Session):
     for t in taxes:
         out.append({
             "id": t.id,
-            "code": str(getattr(t, "code", t.id)),
-            "type": (getattr(t, "type", None) or getattr(t, "tax_type", None) or "").upper(),
-            "rate": float(getattr(t, "rate", 0) or 0),
+            "account_code": str(t.account_code or ""),
+            "type": (t.type or "").upper(),
+            "rate": float(t.rate or 0),
+            "name": t.name or "",
         })
     return out
 
@@ -43,7 +90,7 @@ def _find_rate(options, code, tax_type):
         return 0.0
     ttype = (tax_type or "").upper()
     for t in options:
-        if (t["type"] or "").upper() == ttype and (str(t["id"]) == str(code) or t["code"] == code):
+        if (t["type"] or "").upper() == ttype and (str(t["id"]) == str(code) or t["account_code"] == str(code)):
             return float(t["rate"] or 0)
     return 0.0
 
@@ -78,9 +125,9 @@ def _remove_stock_entries_for_purchase(db: Session, purchase: models.PurchaseInv
     except Exception:
         pass
 
-def _rebuild_stock_entries_for_purchase(db: Session, purchase: models.PurchaseInvoice):
+def _rebuild_stock_entries_for_purchase(db: Session, purchase: PurchaseInvoice):
     _remove_stock_entries_for_purchase(db, purchase)
-    lines = db.query(models.PurchaseInvoiceLine).filter_by(purchase_invoice_id=purchase.id).all()
+    lines = db.query(PurchaseInvoiceLine).filter_by(purchase_invoice_id=purchase.id).all()
     for ln in lines:
         if ln is None:
             continue
@@ -117,22 +164,30 @@ def get_next_occurrence(current_date, day_of_month):
 
 @router.get("/purchase_invoices/")
 def legacy_list_purchase_invoices(db: Session = Depends(get_db)):
-    return db.query(models.PurchaseInvoice).all()
+    return db.query(PurchaseInvoice).all()
 
 @router.get("/purchase-invoices")
 def list_purchase_invoices(db: Session = Depends(get_db)):
     purchases = (
-        db.query(models.PurchaseInvoice)
-        .options(joinedload(models.PurchaseInvoice.lines))
+        db.query(PurchaseInvoice)
+        .options(joinedload(PurchaseInvoice.lines))
         .all()
     )
     supplier_ids = [p.supplier_id for p in purchases if p.supplier_id]
-    suppliers = {s.id: s.name for s in db.query(models.Supplier).filter(models.Supplier.id.in_(supplier_ids)).all()}
+    # Fetch supplier name and pin for all relevant suppliers
+    suppliers = {}
+    for s in db.query(models.Supplier).filter(models.Supplier.id.in_(supplier_ids)).all():
+        # Prefer kra_pin if present; fallback to generic pin
+        pin_val = getattr(s, "kra_pin", None)
+        if not pin_val:
+            pin_val = getattr(s, "pin", None)
+        suppliers[s.id] = {"name": s.name, "pin": pin_val}
     out = []
-    # PurchasePayment model does not exist, so skip payment aggregation
     for p in purchases:
         data = PurchaseInvoiceOut.from_orm(p).dict()
-        data["supplier_name"] = suppliers.get(p.supplier_id, "")
+        supplier_info = suppliers.get(p.supplier_id, {})
+        data["supplier_name"] = supplier_info.get("name", "")
+        data["supplier_pin"] = supplier_info.get("pin", "")
         data["amount_paid"] = getattr(p, "amount_paid", 0)
         data["balance_due"] = (p.total_amount or 0) - data["amount_paid"]
         out.append(data)
@@ -140,8 +195,43 @@ def list_purchase_invoices(db: Session = Depends(get_db)):
 
 @router.get("/pending_recurring", response_model=list[PurchaseInvoiceOut])
 def get_pending_recurring(db: Session = Depends(get_db)):
-    # You can refine the filter as needed
-    return db.query(PurchaseInvoice).filter(PurchaseInvoice.is_recurring == True).all()
+    # Get recurring invoices with supplier names - keep original logic
+    purchases = (
+        db.query(PurchaseInvoice)
+        .filter(PurchaseInvoice.is_recurring == True)
+        .options(joinedload(PurchaseInvoice.lines))
+        .all()
+    )
+    supplier_ids = [p.supplier_id for p in purchases if p.supplier_id]
+    suppliers = {s.id: s.name for s in db.query(models.Supplier).filter(models.Supplier.id.in_(supplier_ids)).all()}
+    
+    out = []
+    for p in purchases:
+        # Calculate next issue date if not set (this is the main fix needed)
+        if not p.next_issue_date and p.recurrence_interval:
+            p.next_issue_date = calculate_next_issue_date(p.invoice_date, p.recurrence_interval)
+        
+        data = PurchaseInvoiceOut.from_orm(p).dict()
+        data["supplier_name"] = suppliers.get(p.supplier_id, f"Unknown Supplier (ID: {p.supplier_id})")
+        # Add fields expected by frontend
+        data["template_id"] = p.id  # Use the invoice ID as template ID
+        
+        # Build description from line items (item/description)
+        line_descriptions = []
+        for line in p.lines:
+            item_desc = []
+            if line.item:
+                item_desc.append(line.item)
+            if line.description and line.description != line.item:
+                item_desc.append(line.description)
+            if item_desc:
+                line_descriptions.append(" / ".join(item_desc))
+        
+        data["description"] = ", ".join(line_descriptions) if line_descriptions else p.reference or "No description"
+        out.append(data)
+    
+    db.commit()  # Save any calculated next_issue_dates
+    return out
 
 @router.get("/taxes/")
 def get_taxes(db: Session = Depends(get_db)):
@@ -152,8 +242,8 @@ def get_taxes(db: Session = Depends(get_db)):
 @router.get("/{id}")
 def get_purchase(id: int, db: Session = Depends(get_db)):
     purchase = (
-        db.query(models.PurchaseInvoice)
-        .options(joinedload(models.PurchaseInvoice.lines))
+        db.query(PurchaseInvoice)
+        .options(joinedload(PurchaseInvoice.lines))
         .filter_by(id=id)
         .first()
     )
@@ -181,6 +271,8 @@ def get_purchase(id: int, db: Session = Depends(get_db)):
         "invoice_date": to_ymd(purchase.invoice_date),
         "supplier_id": purchase.supplier_id,
         "supplier_name": supplier.name if supplier else "",
+        # Expose supplier PIN for view dialogs and reports
+        "supplier_pin": getattr(supplier, "kra_pin", None) or getattr(supplier, "pin", None) or "",
         "reference": purchase.reference,
         "total": purchase.total_amount,
         "amount_paid": getattr(purchase, "amount_paid", 0),
@@ -189,6 +281,7 @@ def get_purchase(id: int, db: Session = Depends(get_db)):
         "currency_code": curr,
         "exchange_rate": rate,
         "cu_inv_number": getattr(purchase, "cu_inv_number", None),
+        "make_recurring": getattr(purchase, "make_recurring", False),
         "lines": [
             {
                 "id": line.id,
@@ -216,9 +309,11 @@ def get_purchase(id: int, db: Session = Depends(get_db)):
 
 @router.post("/")
 def create_purchase(invoice: PurchaseInvoiceCreate, db: Session = Depends(get_db)):
+    print(f"🔍 [CREATE] Received invoice data: supplier_id={invoice.supplier_id}, lines_count={len(invoice.lines or [])}")
+    print(f"🔍 [CREATE] Lines: {invoice.lines}")
     code = (invoice.currency_code or "KES").split()[0].upper()
     rate = float(invoice.exchange_rate or 1.0)
-    db_invoice = models.PurchaseInvoice(
+    db_invoice = PurchaseInvoice(
         invoice_date=parse_date(invoice.invoice_date),
         supplier_id=invoice.supplier_id,
         reference=invoice.reference or None,
@@ -246,7 +341,7 @@ def create_purchase(invoice: PurchaseInvoiceCreate, db: Session = Depends(get_db
             if product:
                 item_val = product.sku or product.name
         print(f"[DEBUG] Adding line: product_id={ln.product_id}, type={line_type}, item={item_val}, quantity={ln.quantity}, unit_price={ln.unit_price}")
-        db.add(models.PurchaseInvoiceLine(
+        db.add(PurchaseInvoiceLine(
             purchase_invoice_id=db_invoice.id,
             type=line_type,
             product_id=ln.product_id,
@@ -269,7 +364,7 @@ def create_purchase(invoice: PurchaseInvoiceCreate, db: Session = Depends(get_db
             ))
 
     tax_options = get_tax_options(db)
-    lines = db.query(models.PurchaseInvoiceLine).filter_by(purchase_invoice_id=db_invoice.id).all()
+    lines = db.query(PurchaseInvoiceLine).filter_by(purchase_invoice_id=db_invoice.id).all()
     db_invoice.total_amount = calculate_invoice_total(lines, tax_options)
     db.commit()
     db.refresh(db_invoice)
@@ -277,7 +372,9 @@ def create_purchase(invoice: PurchaseInvoiceCreate, db: Session = Depends(get_db
 
 @router.put("/{id}/edit")
 def update_purchase(id: int, invoice: PurchaseInvoiceUpdate, db: Session = Depends(get_db)):
-    inv = db.query(models.PurchaseInvoice).filter_by(id=id).first()
+    print(f"🔍 [UPDATE] Purchase ID={id}, lines_count={len(invoice.lines or [])}")
+    print(f"🔍 [UPDATE] Lines: {invoice.lines}")
+    inv = db.query(PurchaseInvoice).filter_by(id=id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -311,12 +408,16 @@ def update_purchase(id: int, invoice: PurchaseInvoiceUpdate, db: Session = Depen
         inv.recurrence_interval = invoice.recurrence_interval
     if getattr(invoice, "next_issue_date", None) is not None:
         inv.next_issue_date = parse_date(invoice.next_issue_date)
+    
+    # Calculate next_issue_date when marking as recurring
+    if inv.is_recurring and inv.recurrence_interval and not inv.next_issue_date:
+        inv.next_issue_date = calculate_next_issue_date(inv.invoice_date, inv.recurrence_interval)
 
 
     # lines
     if invoice.lines is not None:
         print(f"[DEBUG] Update: Incoming lines: {invoice.lines}")
-        existing_lines = db.query(models.PurchaseInvoiceLine).filter_by(purchase_invoice_id=id).all()
+        existing_lines = db.query(PurchaseInvoiceLine).filter_by(purchase_invoice_id=id).all()
         existing_by_id = {ln.id: ln for ln in existing_lines if ln is not None}
         payload_line_ids = []
 
@@ -336,7 +437,7 @@ def update_purchase(id: int, invoice: PurchaseInvoiceUpdate, db: Session = Depen
                 payload_line_ids.append(ln.id)
             else:
                 print(f"[DEBUG] Adding new line: product_id={line.product_id}, type={line.type}, item={line.item}, quantity={line.quantity}, unit_price={line.unit_price}")
-                db.add(models.PurchaseInvoiceLine(
+                db.add(PurchaseInvoiceLine(
                     purchase_invoice_id=id,
                     type=line.type or ("Product" if line.product_id else "Service"),
                     product_id=line.product_id,
@@ -359,7 +460,7 @@ def update_purchase(id: int, invoice: PurchaseInvoiceUpdate, db: Session = Depen
         _rebuild_stock_entries_for_purchase(db, inv)
 
     tax_options = get_tax_options(db)
-    lines = db.query(models.PurchaseInvoiceLine).filter_by(purchase_invoice_id=id).all()
+    lines = db.query(PurchaseInvoiceLine).filter_by(purchase_invoice_id=id).all()
     inv.total_amount = calculate_invoice_total(lines, tax_options)
     db.commit()
     db.refresh(inv)
@@ -376,41 +477,46 @@ def grossup_missing_lines(payload: dict = Body(None), db: Session = Depends(get_
 def batch_create_recurring(pending_list: list = Body(...), db: Session = Depends(get_db)):
     created = 0
     for item in pending_list:
-        template_id = item.get("template_id")
-        next_date = parse_date(item.get("next_issue_date"))
-        inv = db.query(models.PurchaseInvoice).filter(models.PurchaseInvoice.id == template_id).first()
-        if not inv or not next_date or not inv.is_recurring or not inv.recurrence_interval:
+        template_id = item.get("template_id") or item.get("invoice_id")  # Support both field names
+        template = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == template_id).first()
+        if not template or not template.is_recurring or not template.recurrence_interval:
             continue
 
-        exists = db.query(models.PurchaseInvoice).filter(
-            models.PurchaseInvoice.supplier_id == inv.supplier_id,
-            models.PurchaseInvoice.invoice_date == next_date,
-            models.PurchaseInvoice.id != inv.id
+        # Use template's next_issue_date or calculate it
+        issue_date = template.next_issue_date or calculate_next_issue_date(template.invoice_date, template.recurrence_interval)
+        
+        # Check if invoice for this date already exists
+        exists = db.query(PurchaseInvoice).filter(
+            PurchaseInvoice.supplier_id == template.supplier_id,
+            PurchaseInvoice.invoice_date == issue_date,
+            PurchaseInvoice.is_recurring == False  # Only check non-template invoices
         ).first()
         if exists:
             continue
 
-        new_inv = models.PurchaseInvoice(
-            supplier_id=inv.supplier_id,
-            invoice_date=next_date,
-            reference=None,
+        # Create new invoice from template (NOT recurring)
+        new_inv = PurchaseInvoice(
+            supplier_id=template.supplier_id,
+            invoice_date=issue_date,
+            reference=f"{template.reference or 'REC'}-{issue_date.strftime('%Y%m')}",
             status="Draft",
-            is_recurring=inv.is_recurring,
-            recurrence_interval=inv.recurrence_interval,
-            recurrence_end_date=inv.recurrence_end_date,
-            currency_code=getattr(inv, "currency_code", "KES"),
-            exchange_rate=float(getattr(inv, "exchange_rate", 1.0) or 1.0),
-            cu_inv_number=getattr(inv, "cu_inv_number", None),
+            is_recurring=False,  # New invoice is NOT a template
+            recurrence_interval=None,
+            recurrence_end_date=None,
+            next_issue_date=None,
+            currency_code=getattr(template, "currency_code", "KES"),
+            exchange_rate=float(getattr(template, "exchange_rate", 1.0) or 1.0),
+            cu_inv_number=None,  # New invoice gets new number
             total_amount=0.0,
         )
         db.add(new_inv)
         db.flush()
 
-        src_lines = db.query(models.PurchaseInvoiceLine).filter(
-            models.PurchaseInvoiceLine.purchase_invoice_id == inv.id
+        src_lines = db.query(PurchaseInvoiceLine).filter(
+            PurchaseInvoiceLine.purchase_invoice_id == template.id
         ).all()
         for ln in src_lines:
-            db.add(models.PurchaseInvoiceLine(
+            db.add(PurchaseInvoiceLine(
                 purchase_invoice_id=new_inv.id,
                 type=ln.type,
                 product_id=ln.product_id,
@@ -423,24 +529,49 @@ def batch_create_recurring(pending_list: list = Body(...), db: Session = Depends
                 excise_code=ln.excise_code,
             ))
 
+        # Calculate total for new invoice
         tax_options = get_tax_options(db)
-        new_lines = db.query(models.PurchaseInvoiceLine).filter(
-            models.PurchaseInvoiceLine.purchase_invoice_id == new_inv.id
+        new_lines = db.query(PurchaseInvoiceLine).filter(
+            PurchaseInvoiceLine.purchase_invoice_id == new_inv.id
         ).all()
         new_inv.total_amount = calculate_invoice_total(new_lines, tax_options)
-        db.commit()
-
+        
+        # Update template's next_issue_date
+        template.next_issue_date = calculate_next_issue_date(issue_date, template.recurrence_interval)
+        
         created += 1
 
+    db.commit()
     return {"created": created}
+
+@router.post("/batch_delete_recurring_templates")
+def batch_delete_recurring_templates(template_ids: list[int] = Body(...), db: Session = Depends(get_db)):
+    """Delete recurring invoice templates (turn off recurring, don't delete actual invoices)"""
+    deleted = 0
+    for template_id in template_ids:
+        template = db.query(PurchaseInvoice).filter(
+            PurchaseInvoice.id == template_id,
+            PurchaseInvoice.is_recurring == True
+        ).first()
+        
+        if template:
+            # Turn off recurring instead of deleting
+            template.is_recurring = False
+            template.recurrence_interval = None
+            template.recurrence_end_date = None
+            template.next_issue_date = None
+            deleted += 1
+    
+    db.commit()
+    return {"deleted": deleted}
 
 @router.post("/{invoice_id}/copy")
 def copy_purchase_invoices(invoice_id: int, db: Session = Depends(get_db)):
-    original = db.query(models.PurchaseInvoice).filter(models.PurchaseInvoice.id == invoice_id).first()
+    original = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == invoice_id).first()
     if not original:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    new_inv = models.PurchaseInvoice(
+    new_inv = PurchaseInvoice(
         supplier_id=original.supplier_id,
         invoice_date=date.today(),
         status="Draft",
@@ -456,11 +587,11 @@ def copy_purchase_invoices(invoice_id: int, db: Session = Depends(get_db)):
     db.add(new_inv)
     db.flush()
 
-    lines = db.query(models.PurchaseInvoiceLine).filter(
-        models.PurchaseInvoiceLine.purchase_invoice_id == invoice_id
+    lines = db.query(PurchaseInvoiceLine).filter(
+        PurchaseInvoiceLine.purchase_invoice_id == invoice_id
     ).all()
     for ln in lines:
-        db.add(models.PurchaseInvoiceLine(
+        db.add(PurchaseInvoiceLine(
             purchase_invoice_id=new_inv.id,
             type=ln.type,
             product_id=ln.product_id,
@@ -474,8 +605,8 @@ def copy_purchase_invoices(invoice_id: int, db: Session = Depends(get_db)):
         ))
 
     tax_options = get_tax_options(db)
-    new_lines = db.query(models.PurchaseInvoiceLine).filter(
-        models.PurchaseInvoiceLine.purchase_invoice_id == new_inv.id
+    new_lines = db.query(PurchaseInvoiceLine).filter(
+        PurchaseInvoiceLine.purchase_invoice_id == new_inv.id
     ).all()
     new_inv.total_amount = calculate_invoice_total(new_lines, tax_options)
     db.commit()
@@ -486,7 +617,7 @@ def copy_purchase_invoices(invoice_id: int, db: Session = Depends(get_db)):
 def batch_delete(ids: list = Body(...), db: Session = Depends(get_db)):
     deleted = 0
     for invoice_id in ids:
-        inv = db.query(models.PurchaseInvoice).filter_by(id=invoice_id).first()
+        inv = db.query(PurchaseInvoice).filter_by(id=invoice_id).first()
         if inv:
             _remove_stock_entries_for_purchase(db, inv)
             db.delete(inv)
@@ -498,7 +629,7 @@ def batch_delete(ids: list = Body(...), db: Session = Depends(get_db)):
 def batch_post(ids: list = Body(...), db: Session = Depends(get_db)):
     posted = 0
     for invoice_id in ids:
-        inv = db.query(models.PurchaseInvoice).filter_by(id=invoice_id).first()
+        inv = db.query(PurchaseInvoice).filter_by(id=invoice_id).first()
         if inv and inv.status != "Posted":
             inv.status = "Posted"
             db.flush()
@@ -506,3 +637,273 @@ def batch_post(ids: list = Body(...), db: Session = Depends(get_db)):
             posted += 1
     db.commit()
     return {"posted": posted}
+
+@router.get("/{id}/pdf")
+def get_purchase_pdf(id: int, db: Session = Depends(get_db)):
+    """Generate clean invoice PDF matching the reference design"""
+    try:
+        from fastapi.responses import StreamingResponse
+        from io import BytesIO
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+
+        # Fetch data
+        purchase = db.query(PurchaseInvoice).filter_by(id=id).first()
+        if not purchase:
+            raise HTTPException(status_code=404, detail="Purchase invoice not found")
+
+        lines = db.query(PurchaseInvoiceLine).filter_by(purchase_invoice_id=id).all()
+        supplier = db.query(models.Supplier).filter_by(id=purchase.supplier_id).first()
+
+        # Company info
+        from models.company import CompanyProfile
+        company = db.query(CompanyProfile).first()
+        company_name = getattr(company, "name", None) or getattr(company, "company_name", None) or "Tandaa Networks"
+        company_address = getattr(company, "address", None) or "Kilifi, Kilifi Creek"
+        company_email = getattr(company, "email", None) or "support@tandaa.africa" 
+        company_phone = getattr(company, "phone", None) or "0768886466,0730729729"
+
+        # Tax options
+        tax_options = get_tax_options(db)
+        vat_rates = {}
+        excise_rates = {}
+
+        for tax in tax_options:
+            ttype = str(tax.get("type", "") or "").upper()
+            code_key = str(tax.get("account_code", "") or "")
+            rate = float(tax.get("rate", 0) or 0)
+            if "VAT" in ttype:
+                vat_rates[code_key] = rate
+            elif "EXCISE" in ttype:
+                excise_rates[code_key] = rate
+
+        # Define exact column widths for perfect alignment - DEFINE EARLY BEFORE ANY TABLE USAGE
+        desc_width = 90*mm    # Description column
+        rate_width = 30*mm    # Rate column  
+        qty_width = 25*mm     # Quantity column
+        price_width = 25*mm   # Price column
+
+        # Calculate totals
+        subtotal = 0.0
+        excise_total = 0.0
+        vat_total = 0.0
+
+        for line in lines:
+            qty = float(line.quantity or 0)
+            unit_price = float(line.unit_price or 0)
+            base_amount = qty * unit_price
+            
+            # Excise
+            excise_key = str(line.excise_code or "")
+            excise_rate = excise_rates.get(excise_key, 0.0)
+            excise_amount = base_amount * excise_rate
+            
+            # VAT
+            vat_key = str(line.vat_code or "")
+            vat_rate = vat_rates.get(vat_key, 0.0)
+            vat_amount = (base_amount + excise_amount) * vat_rate
+            
+            subtotal += base_amount
+            excise_total += excise_amount
+            vat_total += vat_amount
+
+        total = subtotal + excise_total + vat_total
+
+        # PDF setup
+        buf = BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=20*mm, leftMargin=20*mm, rightMargin=20*mm)
+        story = []
+        styles = getSampleStyleSheet()
+
+        # Header with white background bar
+        header_data = [["P U R C H A S E   I N V O I C E"]]
+        header_table = Table(header_data, colWidths=[170*mm])
+        header_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.black),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 14),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(header_table)
+        story.append(Spacer(1, 10*mm))
+
+        supplier_name = supplier.name if supplier else "Unknown Supplier"
+        
+        # Company info and supplier details - aligned properly in same layout
+        company_info = f"""
+<b>{company_name}</b><br/>
+{company_address}<br/>
+Kenya 80108<br/>
+Email: {company_email}<br/>
+Phone: {company_phone}
+        """
+        
+        supplier_details = f"""
+<b>To:</b><br/>
+{supplier_name}<br/>
+Kilifi Kenya<br/>
+{getattr(supplier, 'email', '') or 'N/A'}<br/>
+<b>KRA PIN:</b> {getattr(supplier, 'kra_pin', '') or 'N/A'}
+        """
+        
+        # Add company info and supplier on same row for proper alignment
+        company_supplier_data = [
+            [Paragraph(company_info, styles['Normal']), Paragraph(supplier_details, styles['Normal'])]
+        ]
+        
+        company_supplier_table = Table(company_supplier_data, colWidths=[desc_width, rate_width + qty_width + price_width])
+        company_supplier_table.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(company_supplier_table)
+        story.append(Spacer(1, 10*mm))
+        
+        # Invoice details in table format with borders - aligned with Quantity + Price columns
+        invoice_details_data = [
+            ["Invoice #", purchase.reference or f'INV-{id}'],
+            ["Date Created", str(purchase.invoice_date)],
+            ["Due Date", str(purchase.invoice_date)], 
+            ["Status", 'Paid' if float(getattr(purchase, 'amount_paid', 0) or 0) > 0 else 'Unpaid']
+        ]
+        
+        # Create invoice details table with borders - smaller font and better alignment
+        invoice_table = Table(invoice_details_data, colWidths=[qty_width, price_width])  # Exact alignment with Quantity + Price
+        invoice_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),  # Smaller font
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        
+        # Invoice table positioned to align with quantity and price columns
+        invoice_wrapper_data = [["", "", invoice_table]]
+        invoice_wrapper_table = Table(invoice_wrapper_data, colWidths=[desc_width, rate_width, qty_width + price_width])
+        invoice_wrapper_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(invoice_wrapper_table)
+        story.append(Spacer(1, 15*mm))
+
+        # Items table - using consistent column widths
+        items_data = [["Description", "Rate", "Quantity", "Price"]]
+        
+        for line in lines:
+            qty = float(line.quantity or 0)
+            unit_price = float(line.unit_price or 0)
+            base_amount = qty * unit_price
+            
+            # Calculate tax-inclusive line total
+            excise_key = str(line.excise_code or "")
+            excise_rate = excise_rates.get(excise_key, 0.0)
+            excise_amount = base_amount * excise_rate
+            
+            vat_key = str(line.vat_code or "")
+            vat_rate = vat_rates.get(vat_key, 0.0)
+            vat_amount = (base_amount + excise_amount) * vat_rate
+            
+            line_total_inclusive = base_amount + excise_amount + vat_amount
+            
+            # Combine item and description
+            description = f"{line.item or ''}"
+            if line.description and line.description != line.item:
+                description = f"{line.item or ''} | {line.description}"
+            
+            items_data.append([
+                description[:50],  # Limit length
+                f"Ksh {unit_price:,.2f}",
+                f"{qty:,.0f}",
+                f"Ksh {line_total_inclusive:,.2f}"  # Tax-inclusive price
+            ])
+
+        # Use the same exact column widths throughout
+        items_table = Table(items_data, colWidths=[desc_width, rate_width, qty_width, price_width])
+        items_table.setStyle(TableStyle([
+            # Header
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),  # Smaller header font
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),   # Description
+            ('ALIGN', (1, 0), (1, -1), 'CENTER'), # Rate  
+            ('ALIGN', (2, 0), (2, -1), 'CENTER'), # Quantity
+            ('ALIGN', (3, 0), (3, -1), 'RIGHT'),  # Price
+            # Body
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),  # Smaller body font
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),  # Reduced padding
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(items_table)
+        story.append(Spacer(1, 10*mm))
+
+        # Summary totals - aligned with Quantity + Price columns exactly
+        summary_data = [
+            ["Sub total", f"Ksh {subtotal:,.2f}"],
+            ["VAT", f"Ksh {vat_total:,.2f}"],
+            ["Excise", f"Ksh {excise_total:,.2f}"],
+            ["Total", f"Ksh {total:,.2f}"]
+        ]
+
+        # Position summary table to align with Quantity + Price columns
+        # Need to offset by Description + Rate widths to align perfectly
+        summary_table = Table(summary_data, colWidths=[qty_width, price_width], hAlign='RIGHT')
+        summary_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -2), 'Helvetica'),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),  # Same small font for all including total
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('LEFTPADDING', (0, 0), (-1, -1), 3),  # Even smaller padding
+            ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        
+        # Create a wrapper table to position summary correctly
+        summary_wrapper_data = [["", "", summary_table]]
+        summary_wrapper = Table(summary_wrapper_data, colWidths=[desc_width, rate_width, qty_width + price_width])
+        summary_wrapper.setStyle(TableStyle([
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        story.append(summary_wrapper)
+
+        # Build PDF
+        doc.build(story)
+        buf.seek(0)
+
+        filename = f"invoice_{purchase.reference or id}.pdf"
+        return StreamingResponse(
+            BytesIO(buf.read()),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        print(f"PDF Error: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")

@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../lib/api";
 
-const Increments = ({ staffNo }) => {
+const Increments = ({ staffNo, onChanged }) => {
   const [increments, setIncrements] = useState([]);
-  const [newInc, setNewInc] = useState({ start_date: "", gross_pay: "" });
+  const [newInc, setNewInc] = useState({ start_date: "", gross_pay: "", end_date: "" });
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [editIdx, setEditIdx] = useState(null);
-  const [editInc, setEditInc] = useState({ start_date: "", gross_pay: "" });
+  const [editInc, setEditInc] = useState({ start_date: "", gross_pay: "", end_date: "" });
 
   useEffect(() => {
     if (!staffNo) return;
@@ -26,12 +26,13 @@ const Increments = ({ staffNo }) => {
     setLoading(true);
     setErr("");
     try {
-      const res = await axios.post(`${API_BASE}/employees/${staffNo}/increments`, {
-        start_date: newInc.start_date,
-        gross_pay: parseFloat(newInc.gross_pay)
-      });
-      setIncrements([...increments, res.data]);
-      setNewInc({ start_date: "", gross_pay: "" });
+      const payload = { start_date: newInc.start_date, gross_pay: parseFloat(newInc.gross_pay) };
+      if (newInc.end_date) payload.end_date = newInc.end_date;
+      const res = await axios.post(`${API_BASE}/employees/${staffNo}/increments`, payload);
+      setIncrements(prev => [...prev, res.data]);
+      setNewInc({ start_date: "", gross_pay: "", end_date: "" });
+      // Notify parent that increments changed so it can update basic salary
+      if (onChanged) onChanged();
     } catch (err) {
       setErr("Failed to add increment");
     } finally {
@@ -44,6 +45,7 @@ const Increments = ({ staffNo }) => {
     setEditInc({
       start_date: increments[idx].start_date,
       gross_pay: increments[idx].gross_pay,
+      end_date: increments[idx].end_date || "",
     });
   };
 
@@ -56,12 +58,13 @@ const Increments = ({ staffNo }) => {
     setLoading(true);
     setErr("");
     try {
-      const res = await axios.put(`${API_BASE}/employees/increments/${incId}`, {
-        start_date: editInc.start_date,
-        gross_pay: parseFloat(editInc.gross_pay)
-      });
+      const payload = { start_date: editInc.start_date, gross_pay: parseFloat(editInc.gross_pay) };
+      if (editInc.end_date !== undefined) payload.end_date = editInc.end_date || "";
+      const res = await axios.put(`${API_BASE}/employees/increments/${incId}`, payload);
       setIncrements(increments.map((inc) => (inc.id === incId ? res.data : inc)));
       cancelEdit();
+      // Notify parent that increments changed so it can update basic salary
+      if (onChanged) onChanged();
     } catch (err) {
       setErr("Failed to update increment");
     } finally {
@@ -76,6 +79,8 @@ const Increments = ({ staffNo }) => {
     try {
       await axios.delete(`${API_BASE}/employees/increments/${incId}`);
       setIncrements(increments.filter((inc) => inc.id !== incId));
+      // Notify parent that increments changed so it can update basic salary
+      if (onChanged) onChanged();
     } catch (err) {
       setErr("Failed to delete increment");
     } finally {
@@ -91,15 +96,16 @@ const Increments = ({ staffNo }) => {
         <thead>
           <tr>
             <th className="border px-2 py-1">Start Date</th>
+            <th className="border px-2 py-1">End Date</th>
             <th className="border px-2 py-1">Gross Pay</th>
             <th className="border px-2 py-1">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {loading ? (
-            <tr><td colSpan={3} className="text-center py-2">Loading...</td></tr>
+            {loading ? (
+            <tr><td colSpan={4} className="text-center py-2">Loading...</td></tr>
           ) : increments.length === 0 ? (
-            <tr><td colSpan={3} className="text-center py-2">No increments yet.</td></tr>
+            <tr><td colSpan={4} className="text-center py-2">No increments yet.</td></tr>
           ) : (
             increments.map((inc, idx) => (
               <tr key={inc.id || idx}>
@@ -113,6 +119,18 @@ const Increments = ({ staffNo }) => {
                     />
                   ) : (
                     inc.start_date
+                  )}
+                </td>
+                <td className="border px-2 py-1">
+                  {editIdx === idx ? (
+                    <input
+                      type="date"
+                      value={editInc.end_date}
+                      onChange={e => setEditInc({ ...editInc, end_date: e.target.value })}
+                      className="border px-1 py-0.5"
+                    />
+                  ) : (
+                    inc.end_date || ""
                   )}
                 </td>
                 <td className="border px-2 py-1">

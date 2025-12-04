@@ -1,14 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom"; // ← add this import
-
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 
 /**
  * Toggle depending on what your backend expects:
  *  - false: send only {template_id, next_issue_date}
  *  - true : send complete invoice payload with lines (header + lines)
  */
-const SEND_FULL_PAYLOAD = false;
+const SEND_FULL_PAYLOAD = true;
 
 /** Safe date => YYYY-MM-DD */
 function toYMD(value) {
@@ -22,9 +21,42 @@ function toYMD(value) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/** Calculate next issue date on client side as fallback */
+function calculateNextIssueDate(currentDate, recurrenceInterval) {
+  if (!currentDate || !recurrenceInterval) return currentDate;
+  
+  const date = new Date(currentDate);
+  const interval = recurrenceInterval.toLowerCase();
+  
+  if (interval.includes('month')) {
+    const months = interval.includes('1 month') || interval === 'monthly' ? 1 : 
+                  interval.match(/(\d+)\s*month/) ? parseInt(interval.match(/(\d+)\s*month/)[1]) : 1;
+    date.setMonth(date.getMonth() + months);
+  } else if (interval.includes('year')) {
+    const years = interval.match(/(\d+)\s*year/) ? parseInt(interval.match(/(\d+)\s*year/)[1]) : 1;
+    date.setFullYear(date.getFullYear() + years);
+  }
+  
+  return toYMD(date);
+}
+
 function fmt(n) {
   const num = Number(n ?? 0);
   return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Fetch suppliers to get names */
+async function fetchSuppliers(baseUrl) {
+  try {
+    const res = await fetch(`${baseUrl}/suppliers/`);
+    if (res.ok) {
+      const suppliers = await res.json();
+      return suppliers.reduce((acc, s) => ({ ...acc, [s.id]: s.name }), {});
+    }
+  } catch (e) {
+    console.error("Failed to fetch suppliers:", e);
+  }
+  return {};
 }
 
 /** Try several likely query param names that FastAPI endpoints often use */
@@ -32,8 +64,35 @@ async function fetchPendingRecurring(baseUrl) {
   const res = await fetch(`${baseUrl}/purchases/pending_recurring`);
   const text = await res.text();
   if (!res.ok) throw new Error(text);
-  try { return { data: JSON.parse(text), error: "" }; }
+  try { 
+    const data = JSON.parse(text);
+    
+    // Fetch suppliers to enhance data
+    const suppliers = await fetchSuppliers(baseUrl);
+    
+    // Enhance data with supplier names and descriptions
+    const enhancedData = data.map(inv => ({
+      ...inv,
+      supplier_name: inv.supplier_name || suppliers[inv.supplier_id] || `Supplier ID: ${inv.supplier_id}`,
+      description: inv.description || buildDescriptionFromLines(inv) || inv.reference || "No description"
+    }));
+    
+    return { data: enhancedData, error: "" }; 
+  }
   catch { return { data: [], error: "" }; }
+}
+
+/** Build description from line items */
+function buildDescriptionFromLines(inv) {
+  const lines = inv?.lines || [];
+  const descriptions = lines.map(line => {
+    const parts = [];
+    if (line.item) parts.push(line.item);
+    if (line.description && line.description !== line.item) parts.push(line.description);
+    return parts.join(" / ");
+  }).filter(d => d);
+  
+  return descriptions.join(", ");
 }
 
 export default function PendingRecurringInvoices() {
@@ -69,7 +128,8 @@ export default function PendingRecurringInvoices() {
   }, []);
 
   function rowKey(inv) {
-    return `${inv.template_id}-${toYMD(inv.next_issue_date)}`;
+    const nextDate = inv.next_issue_date || calculateNextIssueDate(inv.invoice_date, inv.recurrence_interval);
+    return `${inv.template_id || inv.id}-${toYMD(nextDate)}`;
   }
 
   function getLines(inv) {
@@ -99,7 +159,26 @@ export default function PendingRecurringInvoices() {
   }
 
   function invSubtotal(inv) {
-    return getLines(inv).reduce((sum, ln) => sum + lineTotal(ln), 0);
+    // Use total_amount (which includes taxes) if available, otherwise calculate from lines
+    const totalAmount = parseFloat(inv.total_amount) || parseFloat(inv.total_with_taxes) || 0;
+    
+    // Debug logging
+    console.log("Invoice total debug:", {
+      id: inv.id,
+      total_amount: inv.total_amount,
+      total_with_taxes: inv.total_with_taxes,
+      parsed: totalAmount,
+      lines_count: getLines(inv).length
+    });
+    
+    if (totalAmount > 0) {
+      return totalAmount;
+    }
+    
+    // Fallback: calculate from lines
+    const lineSum = getLines(inv).reduce((sum, ln) => sum + lineTotal(ln), 0);
+    console.log("Calculated from lines:", lineSum);
+    return lineSum;
   }
 
   function toggleExpand(inv) {
@@ -129,8 +208,8 @@ export default function PendingRecurringInvoices() {
 
   function buildMinimalPayload(list) {
     return list.map(inv => ({
-      template_id: inv.template_id,
-      next_issue_date: toYMD(inv.next_issue_date),
+      template_id: inv.template_id || inv.id,
+      next_issue_date: toYMD(inv.next_issue_date || calculateNextIssueDate(inv.invoice_date, inv.recurrence_interval)),
     }));
   }
 
@@ -154,7 +233,7 @@ export default function PendingRecurringInvoices() {
       return {
         supplier_id: inv.supplier_id ?? undefined,
         supplier_name: inv.supplier_name ?? undefined,
-        invoice_date: toYMD(inv.next_issue_date),
+        invoice_date: toYMD(inv.next_issue_date || calculateNextIssueDate(inv.invoice_date, inv.recurrence_interval)),
         reference: inv.reference ?? undefined,
         description: inv.description ?? "",
         amount: subtotal,
@@ -193,18 +272,21 @@ export default function PendingRecurringInvoices() {
 
   function handleDeleteSelected() {
     if (!selected.length) return;
-    if (!window.confirm("Delete selected pending recurring templates?")) return;
-    // You need a backend endpoint to delete these templates or mark them as ignored
-    // Example POST to /purchases/batch_delete
-    fetch(`${API_BASE}/purchases/batch_delete`, {
+    if (!window.confirm("Turn off recurring for selected invoice templates? This will not delete the original invoices.")) return;
+    
+    fetch(`${API_BASE}/purchases/batch_delete_recurring_templates`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(selected.map(x => x.template_id)),
+      body: JSON.stringify(selected.map(x => x.id)),
     })
       .then(res => res.json())
       .then(data => {
-        alert(`Deleted ${data.deleted} templates`);
+        alert(`Turned off recurring for ${data.deleted} templates`);
         window.location.reload();
+      })
+      .catch(err => {
+        console.error(err);
+        alert("Failed to update templates");
       });
   }
 
@@ -238,7 +320,7 @@ export default function PendingRecurringInvoices() {
             <th className="p-1 border">Next issue date</th>
             <th className="p-1 border">Supplier</th>
             <th className="p-1 border">Header Description</th>
-            <th className="p-1 border text-right">Subtotal</th>
+            <th className="p-1 border text-right">Total (inc. taxes)</th>
           </tr>
         </thead>
         <tbody>
@@ -264,9 +346,9 @@ export default function PendingRecurringInvoices() {
                       {show ? "Hide lines" : "View lines"}
                     </button>
                   </td>
-                  <td className="p-1 border">{toYMD(inv.next_issue_date)}</td>
-                  <td className="p-1 border">{inv.supplier_name ?? ""}</td>
-                  <td className="p-1 border">{inv.description ?? ""}</td>
+                  <td className="p-1 border">{toYMD(inv.next_issue_date || calculateNextIssueDate(inv.invoice_date, inv.recurrence_interval))}</td>
+                  <td className="p-1 border">{inv.supplier_name}</td>
+                  <td className="p-1 border">{inv.description}</td>
                   <td className="p-1 border text-right">
                     {fmt(invSubtotal(inv))}
                   </td>
@@ -343,7 +425,7 @@ export default function PendingRecurringInvoices() {
           onClick={handleDeleteSelected}
           disabled={!selected.length}
         >
-          Delete Selected ({selected.length})
+          Turn Off Recurring ({selected.length})
         </button>
       </div>
 

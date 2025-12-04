@@ -1,6 +1,7 @@
 # schemas/nssf_setting.py
+import pydantic as _pyd
 from datetime import date
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 
 class NSSFSettingBase(BaseModel):
@@ -33,6 +34,7 @@ class NSSFSettingOut(BaseModel):
     tier1_cap: Optional[float]
     tier2_cap: Optional[float]
     max_employee_total: Optional[float]
-
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

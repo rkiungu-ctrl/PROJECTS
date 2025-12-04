@@ -15,6 +15,7 @@ from database import get_db
 import models
 from schemas.invoice import InvoiceCreate, InvoiceResponse, InvoiceListResponse
 from schemas.invoice_line import InvoiceLineResponse
+from utils.date_formatter import format_display_date
 
 router = APIRouter(prefix="/invoices", tags=["Invoicing"])
 
@@ -48,6 +49,7 @@ def list_invoices(
         InvoiceResponse(
             invoice_number=inv.invoice_number,
             invoice_date=inv.invoice_date,
+            invoice_date_formatted=format_display_date(inv.invoice_date),
             customer_name=inv.customer.name if inv.customer else "",
             description=inv.description,
             amount=r1(inv.amount),    # <-- round to 1dp
@@ -137,6 +139,7 @@ def create_invoice(invoice: InvoiceCreate, db: Session = Depends(get_db)):
     return InvoiceResponse(
         invoice_number=new_invoice.invoice_number,
         invoice_date=new_invoice.invoice_date,
+        invoice_date_formatted=format_display_date(new_invoice.invoice_date),
         customer_name=customer.name,
         description=new_invoice.description,
         amount=new_invoice.amount,
@@ -308,7 +311,7 @@ def invoice_pdf(invoice_number: str, db: Session = Depends(get_db)):
     pdf.setFont("Helvetica", 10)
     pdf.drawString(40, y-14, f"Invoice #: {inv.invoice_number}")
     pdf.drawString(40, y-28, f"CU INV Number: {getattr(inv, 'cu_inv_number', '-') or '-'}")
-    pdf.drawString(300, y-14, f"Date: {inv.invoice_date}")
+    pdf.drawString(300, y-14, f"Date: {format_display_date(inv.invoice_date)}")
     y -= 44
 
     # Bill To
@@ -394,6 +397,7 @@ def get_invoice(invoice_number: str, db: Session = Depends(get_db)):
     return InvoiceResponse(
         invoice_number=inv.invoice_number,
         invoice_date=inv.invoice_date,
+        invoice_date_formatted=format_display_date(inv.invoice_date),
         customer_name=inv.customer.name if inv.customer else "",
         description=inv.description,
         amount=base_amount,
@@ -441,6 +445,7 @@ def get_customer_ledger(
         balance += inv.amount
         ledger.append({
             "date": inv.invoice_date,
+            "date_formatted": format_display_date(inv.invoice_date),
             "invoice_number": inv.invoice_number,
             "description": inv.description,
             "amount": inv.amount,
@@ -520,6 +525,7 @@ def update_invoice(invoice_number: str, updated: InvoiceCreate, db: Session = De
     return InvoiceResponse(
         invoice_number=inv.invoice_number,
         invoice_date=inv.invoice_date,
+        invoice_date_formatted=format_display_date(inv.invoice_date),
         customer_name=customer.name if customer else "Unknown",
         description=inv.description,
         amount=inv.amount,

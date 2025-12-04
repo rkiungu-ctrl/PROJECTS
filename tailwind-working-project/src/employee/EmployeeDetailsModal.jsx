@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../lib/api";
 
-// Helper: only append when non-empty (prevents wiping DB with blanks)
+// Helper: append only when value is present
 const putIfTruthy = (fd, k, v) => {
   if (v !== undefined && v !== null && String(v).trim() !== "") fd.append(k, v);
 };
@@ -24,12 +24,12 @@ async function saveHRSlice(staffNo, hr) {
   return data;
 }
 
-// --- save Salary slice ---
-async function saveSalarySlice(staffNo, sal) {
+// --- save Salary slice (optionally force a computed basic) ---
+async function saveSalarySlice(staffNo, sal, computedBasic) {
   const fd = new FormData();
   putIfTruthy(fd, "employment_type", sal.employment_type);
   putIfTruthy(fd, "payment_currency", sal.payment_currency);
-  putIfTruthy(fd, "basic_salary", sal.basic_salary);
+  putIfTruthy(fd, "basic_salary", computedBasic ?? sal.basic_salary);
   putIfTruthy(fd, "work_shift", sal.work_shift);
   putIfTruthy(fd, "off_days", sal.off_days);
   putIfTruthy(fd, "daily_hours", sal.daily_hours);
@@ -41,19 +41,42 @@ async function saveSalarySlice(staffNo, sal) {
   putIfTruthy(fd, "disability_exemption_amount", sal.disability_exemption_amount);
   putIfTruthy(fd, "exemption_certificate_no", sal.exemption_certificate_no);
   putIfTruthy(fd, "mobile_money", sal.mobile_money);
+  // bank & account
+  putIfTruthy(fd, "account_name", sal.account_name);
   putIfTruthy(fd, "bank_name", sal.bank_name);
   putIfTruthy(fd, "bank_account", sal.bank_account);
   putIfTruthy(fd, "branch_name", sal.branch_name);
   putIfTruthy(fd, "branch_code", sal.branch_code);
+  // extras
+  putIfTruthy(fd, "house_allowance", sal.house_allowance);
+  putIfTruthy(fd, "transport_allowance", sal.transport_allowance);
+  putIfTruthy(fd, "other_allowances", sal.other_allowances);
+  putIfTruthy(fd, "commission", sal.commission);
+  putIfTruthy(fd, "bonus", sal.bonus);
+  putIfTruthy(fd, "overtime", sal.overtime);
+  putIfTruthy(fd, "cash_notes", sal.cash_notes);
+  putIfTruthy(fd, "cheque_number", sal.cheque_number);
+  putIfTruthy(fd, "cheque_bank_name", sal.cheque_bank_name);
+
   const { data } = await api.put(`/employees/${encodeURIComponent(staffNo)}/salary`, fd);
+
+  // Also persist leaves when saving salary slice so leave records aren't lost
+  try {
+    const lf = Array.isArray(sal?.leaves) ? sal.leaves : (window?.formData?.leaves || []);
+    if (Array.isArray(lf)) {
+      const fd2 = new FormData();
+      fd2.append("leaves", JSON.stringify(lf));
+      await api.put(`/employees/${encodeURIComponent(staffNo)}`, fd2);
+    }
+  } catch (e) {
+    console.error("Failed to persist leaves after salary save", e);
+  }
   return data;
 }
 
 import {
   PersonalDetails,
   SalaryDetails,
-  HRDetails,
-  Increments,
   ContactDetails,
   Documents,
   Deductions,
@@ -67,11 +90,12 @@ const EmployeeDetailsModal = ({
   employee: initialEmployee = {},
   onClose,
   employees = [],
+  onSaved,
 }) => {
+  // Termination UI stays in EmployeeList; this is strictly for edit/update.
   const [activeTab, setActiveTab] = useState("Personal");
   const prevNameRef = useRef(initialEmployee?.name || "");
 
-  // ---------- Shared form state ----------
   const getInitialFormData = (seed = initialEmployee) => ({
     personal: {
       name: seed.name || "",
@@ -97,10 +121,10 @@ const EmployeeDetailsModal = ({
       daily_hours: seed.daily_hours ?? 8,
       hourly_rate: seed.hourly_rate ?? "",
       daily_rate: seed.daily_rate ?? "",
-      income_tax: seed.income_tax || "P.A.Y.E. Primary Employee",
-      deduct_shif: seed.deduct_shif ?? true,
-      deduct_nssf: seed.deduct_nssf ?? true,
-      deduct_housing_levy: seed.deduct_housing_levy ?? true,
+  income_tax: seed.income_tax || "P.A.Y.E. Primary Employee",
+  deduct_shif: seed.deduct_shif ?? true,
+  deduct_nssf: seed.deduct_nssf ?? true,
+  deduct_housing_levy: seed.deduct_housing_levy ?? true,
       salary_processing_method: seed.salary_processing_method || "Bank",
       account_name: seed.account_name || seed.name || "",
       bank_account: seed.bank_account || "",
@@ -119,15 +143,9 @@ const EmployeeDetailsModal = ({
       commission: seed.commission ?? 0,
       bonus: seed.bonus ?? 0,
       overtime: seed.overtime ?? 0,
-      // extra containers
-      gross_pay: seed.gross_pay ?? "",
-      net_pay: seed.net_pay ?? "",
-      allowances: seed.allowances ?? [],
-      deductions: seed.salary_deductions ?? [],
-      benefits: seed.benefits ?? [],
-      earnings: seed.earnings ?? [],
+      _latest_increment_basic: undefined,
     },
-  hr: {
+    hr: {
       staff_no: seed.staff_no || "",
       job_title: seed.job_title || "",
       department: seed.department || "",
@@ -162,10 +180,31 @@ const EmployeeDetailsModal = ({
     loans: seed.loans || [],
     leaves: seed.leaves || [],
     documents: seed.documents || [],
+
+    // Leave settings (persisted)
+    leaveMonthlyRate: Number(seed.leaveMonthlyRate ?? 1.75),
+    leaveWorkingPattern: seed.leaveWorkingPattern || "Mon-Sat",
+    leaveCustomWorkingDays: Array.isArray(seed.leaveCustomWorkingDays) ? seed.leaveCustomWorkingDays : [],
+    leaveCutoffDate: seed.leaveCutoffDate || "", // set when termination date is selected
   });
 
   const [formData, setFormData] = useState(getInitialFormData());
   const [employee, setEmployee] = useState(initialEmployee);
+
+  // Function to refresh employee data from server
+  const refreshEmployeeData = async () => {
+    const staff = initialEmployee?.staff_no || formData?.hr?.staff_no;
+    if (!staff) return;
+    
+    try {
+      const { data } = await api.get(`/employees/${staff}`);
+      const merged = getInitialFormData(data || initialEmployee);
+      setFormData(merged);
+      setEmployee(data || initialEmployee);
+    } catch (err) {
+      console.error("Failed to refresh employee data:", err);
+    }
+  };
 
   useEffect(() => {
     setFormData(getInitialFormData(initialEmployee));
@@ -181,17 +220,12 @@ const EmployeeDetailsModal = ({
         setFormData(merged);
         setEmployee(data || initialEmployee);
         prevNameRef.current = merged.personal.name || "";
-      } catch {
-        /* keep local */
-      }
+      } catch {/* ignore */}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialEmployee?.staff_no]);
 
-  const personalName = formData.personal?.name || "";
-  const isNew = !initialEmployee?.staff_no;
-
-  // Sync account_name when name changes (unless user has manually edited it)
+  // keep account name in sync with personal name (unless user edited)
   useEffect(() => {
     const currentName = formData.personal?.name ?? "";
     const prevName = prevNameRef.current;
@@ -207,11 +241,19 @@ const EmployeeDetailsModal = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.personal?.name]);
 
-  // ---------- Common save helpers ----------
+  // Listen for termination-date changes from the EmployeeList modal and reflect in Leave tab
+  useEffect(() => {
+    const onTermDate = (ev) => {
+      const dateStr = ev?.detail?.date;
+      if (!dateStr) return;
+      setFormData((prev) => ({ ...prev, leaveCutoffDate: dateStr }));
+    };
+    window.addEventListener("termination-date-changed", onTermDate);
+    return () => window.removeEventListener("termination-date-changed", onTermDate);
+  }, []);
+
   const buildPayload = () => {
     const fd = new FormData();
-
-    // REQUIRED: only append when non-empty to avoid wiping DB with blanks.
     const required = {
       staff_no: formData.hr.staff_no,
       name: formData.personal.name,
@@ -225,7 +267,7 @@ const EmployeeDetailsModal = ({
       bank_account: formData.salary.bank_account,
       branch_name: formData.salary.branch_name,
       branch_code: formData.salary.branch_code,
-      basic_salary: formData.salary.basic_salary,
+      basic_salary: formData.salary._latest_increment_basic ?? formData.salary.basic_salary,
       salary_processing_method: formData.salary.salary_processing_method,
       employment_type: formData.salary.employment_type,
       house_allowance: formData.salary.house_allowance,
@@ -239,14 +281,12 @@ const EmployeeDetailsModal = ({
     };
     Object.entries(required).forEach(([k, v]) => putIfTruthy(fd, k, v));
 
-    const appendRest = (obj, prefixToSkip) => {
-      const skipKeys = new Set(["passport_photo_file", "benefits", "earnings", "next_of_kin"]);
+    const appendRest = (obj) => {
+      const skip = new Set(["passport_photo_file", "benefits", "earnings", "next_of_kin", "_latest_increment_basic"]);
       Object.entries(obj).forEach(([k, v]) => {
-        // skip keys that are handled specially (file or arrays) or that are in the required map
-        if (skipKeys.has(k)) return;
-        // also skip objects/arrays to avoid [object Object] being appended accidentally
+        if (skip.has(k)) return;
         if (v && typeof v === "object") return;
-        if (!(k in required)) fd.append(k, v ?? "");
+        if (!(k in required)) putIfTruthy(fd, k, v);
       });
     };
     appendRest(formData.personal);
@@ -254,17 +294,17 @@ const EmployeeDetailsModal = ({
     appendRest(formData.hr);
     appendRest(formData.contact);
 
-    // If user provided a file, append with the field name backend expects
-    const pfile = formData.personal?.passport_photo_file;
-    if (pfile) {
-      fd.append("passport_photo", pfile);
-    }
+    // Always include deduction flags (even when false) to preserve HR settings
+    fd.append("deduct_shif", formData.salary.deduct_shif ? "true" : "false");
+    fd.append("deduct_nssf", formData.salary.deduct_nssf ? "true" : "false");
+    fd.append("deduct_housing_levy", formData.salary.deduct_housing_levy ? "true" : "false");
 
-    // include loans so modal changes persist (frontend maintains loans in formData.loans)
+    const pfile = formData.personal?.passport_photo_file;
+    if (pfile) fd.append("passport_photo", pfile);
+
     if (Array.isArray(formData.loans) && formData.loans.length > 0) {
       fd.append("loans", JSON.stringify(formData.loans));
     }
-
     if (Array.isArray(formData.salary.benefits)) {
       fd.append("benefits", JSON.stringify(formData.salary.benefits));
     }
@@ -274,12 +314,21 @@ const EmployeeDetailsModal = ({
     if (Array.isArray(formData.contact.next_of_kin)) {
       fd.append("next_of_kin", JSON.stringify(formData.contact.next_of_kin));
     }
+    // ✅ Persist leaves and leave settings with the employee
+    fd.append("leaves", JSON.stringify(Array.isArray(formData.leaves) ? formData.leaves : []));
+    putIfTruthy(fd, "leaveMonthlyRate", formData.leaveMonthlyRate);
+    putIfTruthy(fd, "leaveWorkingPattern", formData.leaveWorkingPattern);
+    if (Array.isArray(formData.leaveCustomWorkingDays)) {
+      fd.append("leaveCustomWorkingDays", JSON.stringify(formData.leaveCustomWorkingDays));
+    }
+    if (formData.leaveCutoffDate) putIfTruthy(fd, "leaveCutoffDate", formData.leaveCutoffDate);
 
     return fd;
   };
 
   const saveEmployee = async () => {
     const payload = buildPayload();
+    try { console.debug("EmployeeDetailsModal: saving leaves count", Array.isArray(formData.leaves) ? formData.leaves.length : 0); } catch {}
     if (!formData?.hr?.staff_no) {
       await api.post(`/employees/`, payload);
     } else {
@@ -295,77 +344,92 @@ const EmployeeDetailsModal = ({
         return;
       }
 
-      let updated;
+      // 1) Contact tab
+      if (activeTab === "Contact") {
+        const contact = formData.contact || {};
+        const fd = new FormData();
+        const put = (k, v) => { if (v !== undefined && v !== null && String(v).trim() !== "") fd.append(k, v); };
+        put("personal_email", contact.personal_email);
+        put("official_email", contact.official_email);
+        put("phone", contact.phone);
+        put("office_phone", contact.office_phone);
+        put("country", contact.country);
+        put("address", contact.address);
+        put("city", contact.city);
+        put("county", contact.county);
+        put("postal_code", contact.postal_code);
+        await api.put(`/employees/${encodeURIComponent(staffNo)}/contact`, fd);
 
-      if (activeTab === "HR") {
-        updated = await saveHRSlice(staffNo, formData.hr);
-        setFormData((prev) => ({ ...prev, hr: {
-          staff_no: updated.staff_no ?? prev.hr?.staff_no ?? "",
-          job_title: updated.job_title ?? prev.hr?.job_title ?? "",
-          department: updated.department ?? prev.hr?.department ?? "",
-          head_of: updated.head_of ?? prev.hr?.head_of ?? "",
-          reports_to: updated.reports_to ?? prev.hr?.reports_to ?? "",
-          region: updated.region ?? prev.hr?.region ?? "",
-          date_of_employment: updated.date_of_employment ?? prev.hr?.date_of_employment ?? "",
-          contract_start: updated.contract_start ?? prev.hr?.contract_start ?? "",
-          contract_end: updated.contract_end ?? prev.hr?.contract_end ?? "",
-          project: updated.project ?? prev.hr?.project ?? "",
-          is_director: updated.is_director ?? prev.hr?.is_director ?? false,
-        }}));
-        alert("HR details saved.");
+        const nok = Array.isArray(contact.next_of_kin) ? contact.next_of_kin : [];
+        await api.put(
+          `/employees/${encodeURIComponent(staffNo)}/next_of_kin`,
+          JSON.stringify(nok),
+          { headers: { "Content-Type": "text/plain" } }
+        );
+
+        // persist leaves/settings too
+        await api.put(`/employees/${encodeURIComponent(staffNo)}`, buildPayload());
+
+        // Refresh modal data from server so any server-side computed fields (loans/leaves)
+        // are reflected immediately in the open modal. Also notify parent to reload list.
+        try {
+          const { data } = await api.get(`/employees/${encodeURIComponent(staffNo)}`);
+          const merged = getInitialFormData(data || initialEmployee);
+          setFormData(merged);
+          setEmployee(data || initialEmployee);
+        } catch (e) {
+          // ignore refresh failures
+        }
+
+        alert("Employee contact and next of kin updated successfully!");
+        onSaved && onSaved();
         return;
       }
 
+      // 2) Salary tab
       if (activeTab === "Salary") {
-        updated = await saveSalarySlice(staffNo, formData.salary);
-        setFormData((prev) => ({ ...prev, salary: {
-          ...prev.salary,
-          employment_type: updated.employment_type ?? prev.salary?.employment_type ?? "",
-          payment_currency: updated.payment_currency ?? prev.salary?.payment_currency ?? "",
-          basic_salary: updated.basic_salary ?? prev.salary?.basic_salary ?? "",
-          work_shift: updated.work_shift ?? prev.salary?.work_shift ?? "",
-          off_days: updated.off_days ?? prev.salary?.off_days ?? "",
-          daily_hours: updated.daily_hours ?? prev.salary?.daily_hours ?? "",
-          income_tax: updated.income_tax ?? prev.salary?.income_tax ?? "",
-          salary_processing_method: updated.salary_processing_method ?? prev.salary?.salary_processing_method ?? "",
-          deduct_shif: !!updated.deduct_shif,
-          deduct_nssf: !!updated.deduct_nssf,
-          deduct_housing_levy: !!updated.deduct_housing_levy,
-          disability_exemption_amount: updated.disability_exemption_amount ?? prev.salary?.disability_exemption_amount ?? "",
-          exemption_certificate_no: updated.exemption_certificate_no ?? prev.salary?.exemption_certificate_no ?? "",
-          mobile_money: updated.mobile_money ?? prev.salary?.mobile_money ?? "",
-          bank_name: updated.bank_name ?? prev.salary?.bank_name ?? "",
-          bank_account: updated.bank_account ?? prev.salary?.bank_account ?? "",
-          branch_name: updated.branch_name ?? prev.salary?.branch_name ?? "",
-          branch_code: updated.branch_code ?? prev.salary?.branch_code ?? "",
-          hourly_rate: updated.hourly_rate ?? prev.salary?.hourly_rate ?? "",
-          daily_rate: updated.daily_rate ?? prev.salary?.daily_rate ?? "",
-        }}));
-        alert("Salary details saved.");
+        await saveHRSlice(staffNo, formData.hr);
+        const computedBasic = formData.salary?._latest_increment_basic;
+        await saveSalarySlice(staffNo, formData.salary, computedBasic);
+
+        // Persist leaves/settings explicitly
+        await api.put(`/employees/${encodeURIComponent(staffNo)}`, buildPayload());
+
+        // Refresh and MERGE leaves if backend omits them
+        try {
+          const { data } = await api.get(`/employees/${encodeURIComponent(staffNo)}`);
+          const merged = getInitialFormData(data);
+          if (!Array.isArray(data?.leaves) || data.leaves.length === 0) {
+            merged.leaves = Array.isArray(formData.leaves) ? formData.leaves : [];
+          }
+          setFormData(merged);
+          setEmployee(data);
+        } catch {/* ignore */}
+
+        alert("Employee updated successfully.");
+        onSaved && onSaved();
         return;
       }
 
-      // Default: Personal (original behavior)
-      const payload = buildPayload();
-      await api.put(`/employees/${encodeURIComponent(staffNo)}`, payload);
+      // 3) All other tabs (including Leave)
+      await api.put(`/employees/${encodeURIComponent(staffNo)}`, buildPayload());
 
-      // re-fetch
+      // Refresh and MERGE leaves if missing
       try {
         const { data } = await api.get(`/employees/${encodeURIComponent(staffNo)}`);
-        // If backend has passport_photo blob, expose a URL to fetch it
-        const enriched = { ...data };
-        if (data && data.passport_photo) {
-          enriched.passport_photo_url = `${api.defaults.baseURL || API_BASE}/employees/${encodeURIComponent(
-            staffNo
-          )}/photo`;
+        const merged = getInitialFormData(data);
+        if (!Array.isArray(data?.leaves) || data.leaves.length === 0) {
+          merged.leaves = Array.isArray(formData.leaves) ? formData.leaves : [];
         }
-        setFormData(getInitialFormData(enriched));
-        setEmployee(enriched);
-      } catch {}
+        setFormData(merged);
+        setEmployee(data);
+      } catch {/* ignore */}
 
       alert("Employee updated successfully.");
+      onSaved && onSaved();
     } catch (e) {
-      alert("Failed to update employee: " + (e?.response?.data?.detail || e?.message || "Unknown error"));
+      const msg = e?.response?.data ? JSON.stringify(e.response.data) : e?.message;
+      alert("Failed to update employee: " + msg);
     }
   };
 
@@ -388,38 +452,19 @@ const EmployeeDetailsModal = ({
           staffNo={formData.hr.staff_no}
           personalName={formData.personal.name}
           data={formData.salary}
+          hrData={formData.hr}
+          employees={employees}
+          onHRChange={(hr) => setFormData((p) => ({ ...p, hr: { ...p.hr, ...hr } }))}
           onChange={(data) => setFormData((prev) => ({ ...prev, salary: { ...prev.salary, ...data } }))}
-          onSaved={(returned) => {
-            if (!returned) return;
-            setFormData((prev) => ({
-              ...prev,
-              salary: {
-                ...prev.salary,
-                employment_type: returned.employment_type ?? prev.salary?.employment_type ?? "",
-                payment_currency: returned.payment_currency ?? prev.salary?.payment_currency ?? "",
-                basic_salary: returned.basic_salary ?? prev.salary?.basic_salary ?? "",
-                work_shift: returned.work_shift ?? prev.salary?.work_shift ?? "",
-                off_days: returned.off_days ?? prev.salary?.off_days ?? "",
-                daily_hours: returned.daily_hours ?? prev.salary?.daily_hours ?? "",
-                income_tax: returned.income_tax ?? prev.salary?.income_tax ?? "",
-                salary_processing_method: returned.salary_processing_method ?? prev.salary?.salary_processing_method ?? "",
-                deduct_shif: !!returned.deduct_shif,
-                deduct_nssf: !!returned.deduct_nssf,
-                deduct_housing_levy: !!returned.deduct_housing_levy,
-                disability_exemption_amount: returned.disability_exemption_amount ?? prev.salary?.disability_exemption_amount ?? "",
-                exemption_certificate_no: returned.exemption_certificate_no ?? prev.salary?.exemption_certificate_no ?? "",
-                mobile_money: returned.mobile_money ?? prev.salary?.mobile_money ?? "",
-                bank_name: returned.bank_name ?? prev.salary?.bank_name ?? "",
-                bank_account: returned.bank_account ?? prev.salary?.bank_account ?? "",
-                branch_name: returned.branch_name ?? prev.salary?.branch_name ?? "",
-                branch_code: returned.branch_code ?? prev.salary?.branch_code ?? "",
-                hourly_rate: returned.hourly_rate ?? prev.salary?.hourly_rate ?? "",
-                daily_rate: returned.daily_rate ?? prev.salary?.daily_rate ?? "",
-              },
-            }));
-          }}
+          onSaved={() => {}}
           formData={formData}
           setFormData={setFormData}
+          onLatestIncrement={(amount) =>
+            setFormData((prev) => ({
+              ...prev,
+              salary: { ...prev.salary, _latest_increment_basic: amount, basic_salary: amount },
+            }))
+          }
         />
       ),
     },
@@ -477,36 +522,16 @@ const EmployeeDetailsModal = ({
         />
       ),
     },
-    {
-      label: "HR",
-      component: (
-        <HRDetails
-          data={formData.hr}
-          onChange={(data) => setFormData((prev) => ({ ...prev, hr: { ...prev.hr, ...data } }))}
-          employees={employees}
-          formData={formData}
-          setFormData={setFormData}
-        />
-      ),
-    },
-    {
-      label: "Contact",
-      component: (
-        <ContactDetails
-          formData={formData}
-          setFormData={setFormData}
-          staffNo={formData.hr.staff_no}
-        />
-      ),
-    },
-    { label: "Deductions", component: <Deductions formData={formData} setFormData={setFormData} /> },
-    { label: "Loans/Advance", component: <LoansAdvance formData={formData} setFormData={setFormData} /> },
+    { label: "Contact", component: <ContactDetails formData={formData} setFormData={setFormData} staffNo={formData.hr.staff_no} /> },
+    { label: "Deductions", component: <Deductions staffNo={formData.hr.staff_no} formData={formData} setFormData={setFormData} /> },
+    { label: "Loans/Advance", component: <LoansAdvance formData={formData} setFormData={setFormData} staffNo={formData?.hr?.staff_no} onDataChange={refreshEmployeeData} /> },
     { label: "Leave", component: <Leave formData={formData} setFormData={setFormData} /> },
     { label: "Documents", component: <Documents formData={formData} setFormData={setFormData} /> },
   ];
 
   const tabOrder = tabs.map((t) => t.label);
   const lastTabLabel = tabOrder[tabOrder.length - 1];
+  const isNew = !initialEmployee?.staff_no;
 
   const handleCreateOrNext = async () => {
     const currentIdx = tabOrder.indexOf(activeTab);
@@ -546,9 +571,7 @@ const EmployeeDetailsModal = ({
           {tabs.map((tab) => (
             <button
               key={tab.label}
-              className={`px-4 py-2 whitespace-nowrap ${
-                activeTab === tab.label ? "border-b-2 border-blue-600 font-bold" : "text-gray-600"
-              }`}
+              className={`px-4 py-2 whitespace-nowrap ${activeTab === tab.label ? "border-b-2 border-blue-600 font-bold" : "text-gray-600"}`}
               onClick={() => setActiveTab(tab.label)}
             >
               {tab.label}
@@ -556,18 +579,20 @@ const EmployeeDetailsModal = ({
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto py-2 scrollbar-thin scrollbar-thumb-blue-400 scrollbar-track-gray-200">
+        <div className="flex-1 overflow-y-auto py-2">
           {tabs.find((t) => t.label === activeTab)?.component}
 
           {!isNew && (
             <div className="flex justify-end mt-4">
-              <button
-                type="button"
-                className="px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700"
-                onClick={handleUpdateEmployee}
-              >
-                Update Employee
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700"
+                  onClick={handleUpdateEmployee}
+                >
+                  Update Employee
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -581,9 +606,7 @@ const EmployeeDetailsModal = ({
             )}
             <button
               type="button"
-              className={`px-4 py-2 bg-green-600 text-white rounded ${
-                !formData.hr?.staff_no ? "opacity-50 cursor-not-allowed" : ""
-              }`}
+              className={`px-4 py-2 bg-green-600 text-white rounded ${!formData.hr?.staff_no ? "opacity-50 cursor-not-allowed" : ""}`}
               disabled={!formData.hr?.staff_no}
               onClick={handleCreateOrNext}
             >

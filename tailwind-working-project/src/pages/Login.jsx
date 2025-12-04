@@ -18,7 +18,7 @@ export default function Login() {
     try {
       // 🔐 Attempt a dummy request with credentials
       const response = await axios.get(
-        "http://127.0.0.1:8000/payrolls/summary",
+        `${API_BASE}/payrolls/summary`,
         {
           params: {
             username,

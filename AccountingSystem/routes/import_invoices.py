@@ -161,7 +161,12 @@ async def import_invoices(file: UploadFile = File(...), db: Session = Depends(ge
 
     for inv_no, lines in groups.items():
         head = lines[0]
-        inv_date = parse_date(first(head, "invoice_date")) or date.today()
+        from utils.date_parser import validate_import_date
+        try:
+            inv_date = validate_import_date(first(head, "invoice_date") or "", f"Invoice {inv_no}")
+        except ValueError as e:
+            failed_invoices.append({"invoice_number": inv_no, "error": str(e)})
+            continue
         cu_inv_number = first(head, "cu_inv_number") or ""
         header_desc = str(first(head, "description") or "")
 

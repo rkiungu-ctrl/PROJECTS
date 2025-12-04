@@ -1,8 +1,10 @@
-from pydantic import BaseModel
+import pydantic as _pyd
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from datetime import date, datetime
 
-class EmployeeLoanSchema(BaseModel):
+
+class LoanAdvanceSchema(BaseModel):
     id: int
     employee_id: int
     loan_type: str
@@ -30,18 +32,7 @@ class EmployeeLoanSchema(BaseModel):
     remarks: Optional[str]
     penalty_rate: Optional[float]
     attachment: Optional[str]
-
-    class Config:
-        orm_mode = True
-
-class EmployeeAdvanceSchema(BaseModel):
-    id: int
-    employee_id: int
-    amount: float
-    balance: float
-    issue_date: date
-    recover_months: int
-    note: Optional[str]
-
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

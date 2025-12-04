@@ -13,7 +13,6 @@ export { default as EmployeeDetailsModal } from "../employee/EmployeeDetailsModa
 export { default as EmployeeList } from "../employee/EmployeeList";
 export { default as PersonalDetails } from "../employee/PersonalDetails";
 export { default as SalaryDetails } from "../employee/SalaryDetails";
-export { default as HRDetails } from "../employee/HRDetails";
 export { default as Increments } from "../employee/Increments";
 export { default as ContactDetails } from "../employee/ContactDetails";
 export { default as Documents } from "../employee/Documents";

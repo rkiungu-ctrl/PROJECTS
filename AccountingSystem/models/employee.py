@@ -1,7 +1,8 @@
-from sqlalchemy import Column, String, Float, Boolean, Integer, Date, LargeBinary
+# models/employee.py
+from sqlalchemy import Column, String, Float, Boolean, Integer, Date, LargeBinary, Text, DateTime
 from sqlalchemy.orm import relationship
 from database import Base
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from models.increment import Increment
 
 class Employee(Base):
@@ -34,6 +35,7 @@ class Employee(Base):
     branch_name = Column(String, nullable=True)
     branch_code = Column(String, nullable=True)
     salary_processing_method = Column(String, nullable=True)  # ensure single definition
+    account_name = Column(String, nullable=True)              # NEW
 
     # Pay and benefits
     basic_salary = Column(Float, nullable=True)
@@ -42,6 +44,10 @@ class Employee(Base):
     other_allowances = Column(Float, nullable=True)
     commission = Column(Float, nullable=True)
     bonus = Column(Float, nullable=True)
+    overtime = Column(Float, nullable=True)                   # NEW
+    cash_notes = Column(Text, nullable=True)                  # NEW
+    cheque_number = Column(String, nullable=True)             # NEW
+    cheque_bank_name = Column(String, nullable=True)          # NEW
     is_director = Column(Boolean, default=False)
 
     # Employment / schedule
@@ -53,9 +59,12 @@ class Employee(Base):
     hourly_rate = Column(Float, nullable=True)
     daily_rate = Column(Float, nullable=True)
     income_tax = Column(String, nullable=True)
+    # Deduction flags (stored as 0/1 integers for compatibility with existing DBs)
     deduct_shif = Column(Integer, nullable=True)
     deduct_nssf = Column(Integer, nullable=True)
     deduct_housing_levy = Column(Integer, nullable=True)
+    # New: explicit PAYE deduction toggle (0 = exempt, 1 = deduct)
+    deduct_paye = Column(Integer, nullable=True)
     disability_exemption_amount = Column(Float, nullable=True)
     exemption_certificate_no = Column(String, nullable=True)
     mobile_money = Column(String, nullable=True)
@@ -74,11 +83,20 @@ class Employee(Base):
     job_title = Column(String, nullable=True)
     department = Column(String, nullable=True)
     reports_to = Column(String, nullable=True)  # staff_no of manager
-    head_of = Column(String, nullable=True)     # <-- NEW: Head of (e.g., Head of Sales)
+    head_of = Column(String, nullable=True)     # Head of (e.g., Head of Sales)
     region = Column(String, nullable=True)
     project = Column(String, nullable=True)
 
     next_of_kin = Column(String, nullable=True)  # Store as JSON string
+
+    # Termination / HR audit fields
+    status = Column(String, nullable=True)
+    termination_date = Column(Date, nullable=True)
+    termination_reason = Column(Text, nullable=True)
+    pro_rate_basic = Column(Boolean, nullable=True)
+    accumulated_leave_payout = Column(Float, nullable=True)
+    terminated_by = Column(String, nullable=True)
+    terminated_at = Column(DateTime, nullable=True)
 
     # ✅ Linked to Payroll records
     payrolls = relationship("Payroll", back_populates="employee")
@@ -87,8 +105,7 @@ class Employee(Base):
     increments = relationship("Increment", back_populates="employee", cascade="all, delete-orphan")
 
 
-# NOTE: This Pydantic class appears unused (your routes import from schemas.employee),
-# but keeping it aligned to avoid confusion if referenced elsewhere.
+# (Optional/legacy) schema mirror kept for compatibility with any imports.
 class EmployeeSchema(BaseModel):
     id: int
     staff_no: str
@@ -104,12 +121,17 @@ class EmployeeSchema(BaseModel):
     branch_name: str
     branch_code: str
     salary_processing_method: str | None = None
+    account_name: str | None = None       # NEW
     basic_salary: float
     house_allowance: float
     transport_allowance: float
     other_allowances: float
     commission: float
     bonus: float
+    overtime: float | None = None         # NEW
+    cash_notes: str | None = None         # NEW
+    cheque_number: str | None = None      # NEW
+    cheque_bank_name: str | None = None   # NEW
     is_director: bool
     employment_type: str
     gender: str | None = None
@@ -126,19 +148,27 @@ class EmployeeSchema(BaseModel):
     deduct_shif: bool | None = None
     deduct_nssf: bool | None = None
     deduct_housing_levy: bool | None = None
+    deduct_paye: bool | None = None
     disability_exemption_amount: float | None = None
     exemption_certificate_no: str | None = None
     mobile_money: str | None = None
     job_title: str | None = None
     department: str | None = None
     reports_to: str | None = None
-    head_of: str | None = None  # <-- NEW in schema mirror
+    head_of: str | None = None
     region: str | None = None
     date_of_employment: str | None = None
     contract_start: str | None = None
     contract_end: str | None = None
     project: str | None = None
     next_of_kin: list = []
+    status: str | None = None
+    termination_date: str | None = None
+    termination_reason: str | None = None
+    pro_rate_basic: bool | None = None
+    accumulated_leave_payout: float | None = None
+    terminated_by: str | None = None
+    terminated_at: str | None = None
 
-    class Config:
-        orm_mode = True
+    # Pydantic v2 compatibility for `.from_orm()`
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)

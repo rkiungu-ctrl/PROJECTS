@@ -63,6 +63,8 @@ class PurchaseInvoiceLine(Base):
     unit_price = Column(Float, nullable=True, default=0.0)
     vat_code = Column(String, nullable=True)
     excise_code = Column(String, nullable=True)
+    vat = Column(Float, nullable=True, default=0.0)  # VAT amount for this line
+    is_vat_inclusive = Column(Boolean, nullable=True, default=False)  # Is the line amount VAT inclusive?
 
     # relationship back to header
     invoice = relationship("PurchaseInvoice", back_populates="lines")

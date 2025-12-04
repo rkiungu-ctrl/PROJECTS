@@ -2,677 +2,655 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { format } from "date-fns";
 
-const API_BASE = "http://127.0.0.1:8000";
-const GET_PROFILE = `${API_BASE}/company/profile`;
+import { API_BASE } from "../lib/api";
 
-const PayrollTab = () => {
-  const [periods, setPeriods] = useState([]);
-  const [selectedPeriod, setSelectedPeriod] = useState(null);
+import { useLocation, Link } from "react-router-dom";
+
+function fmt(n) {
+  const v = Number(n || 0);
+  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export default function PayrollTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState(null);
+  const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [details, setDetails] = useState([]);
-  const [loadingDetails, setLoadingDetails] = useState(false);
-  const [selectedEmployee, setSelectedEmployee] = useState(null);
-  const [company, setCompany] = useState(null);
-  const [selectedIds, setSelectedIds] = useState([]); // <-- Move here
+  const location = useLocation();
 
-  // Fetch payroll periods
+  // open the create UI when ?create=1 is present in the URL
   useEffect(() => {
-    axios.get(`${API_BASE}/payrolls/periods`)
-      .then(res => setPeriods(res.data))
-      .catch(() => setPeriods([]));
+    try {
+      const params = new URLSearchParams(location.search);
+      if (params.get("create")) setShowCreate(true);
+    } catch (e) {
+      // ignore
+    }
+  }, [location.search]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [p, r] = await Promise.all([
+          axios.get(`${API_BASE}/company/profile`).catch(() => ({ data: null })),
+          axios.get(`${API_BASE}/payrolls/periods`),
+        ]);
+        setProfile(p?.data || null);
+        setRows(Array.isArray(r.data) ? r.data : []);
+      } catch (e) {
+        setError("Failed to load payroll periods");
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  // Fetch company profile
-  useEffect(() => {
-    fetch(GET_PROFILE)
-      .then(res => res.json())
-      .then(data => setCompany(data));
-  }, []);
+  const handleDelete = async (period) => {
+    if (!window.confirm(`Delete ALL payrolls for ${format(new Date(period), "MMM yyyy")}? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      // send confirm flag in body so backend requires explicit confirmation
+      await axios.delete(`${API_BASE}/payrolls/${period}`, { data: { confirm: true } });
+      // refresh
+      const r = await axios.get(`${API_BASE}/payrolls/periods`);
+      setRows(Array.isArray(r.data) ? r.data : []);
+    } catch (e) {
+      alert("Failed to delete period.");
+    }
+  };
 
-  // Fetch payroll details for selected period
-  useEffect(() => {
-    if (!selectedPeriod) return;
-    setLoadingDetails(true);
-    axios.get(`${API_BASE}/payrolls/${selectedPeriod}/details`)
-      .then(res => setDetails(res.data))
-      .catch(() => setDetails([]))
-      .finally(() => setLoadingDetails(false));
-  }, [selectedPeriod]);
-
-  // Payroll creation form state
-  const [form, setForm] = useState({
-    period: "",
-    employees: [],
-  });
+  // ---- Mass-create UI state and handlers ----
+  const [createForm, setCreateForm] = useState({ period: "", employees: [] });
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState(null);
+  const [createErr, setCreateErr] = useState("");
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [serverResults, setServerResults] = useState(null);
+  const [showOverwriteModal, setShowOverwriteModal] = useState(false);
+  const [overwriteCandidates, setOverwriteCandidates] = useState([]);
 
-  // Handle payroll creation
-  const handleCreatePayroll = async () => {
-    setCreating(true);
-    setError(null);
+  // Money input component: shows formatted value when blurred, raw when focused
+  const MoneyInput = ({ value, onChange, className }) => {
+    const [display, setDisplay] = useState(() => (value == null ? "" : Number(value).toLocaleString()));
+    const [focused, setFocused] = useState(false);
 
-    // Only send required fields as per backend schema
-    const payloadA = form.employees.map(emp => ({
-      staff_no: emp.staff_no,
-      // period must be a date string (YYYY-MM-DD)
-      period: form.period + "-01", // If form.period is "2025-08", convert to "2025-08-01"
-      basic_salary: parseFloat(emp.basic_salary) || 0,
-      house_allowance: parseFloat(emp.house_allowance) || 0,
-      transport_allowance: parseFloat(emp.transport_allowance) || 0,
-      other_allowances: parseFloat(emp.other_allowances) || 0,
-      commission: parseFloat(emp.commission) || 0,
-      bonus: parseFloat(emp.bonus) || 0,
-      loan: parseFloat(emp.loan) || 0,
-      advance: parseFloat(emp.advance) || 0,
+    useEffect(() => {
+      if (!focused) setDisplay(value == null ? "" : Number(value).toLocaleString());
+    }, [value, focused]);
+
+    const parse = (v) => {
+      if (v === "" || v == null) return "";
+      const cleaned = String(v).replace(/[^0-9.-]+/g, '');
+      const n = Number(cleaned);
+      return isNaN(n) ? "" : n;
+    };
+
+    return (
+      <input
+        type="text"
+        className={className}
+        value={display}
+        onFocus={(e) => { setFocused(true); setDisplay(value == null ? "" : String(value)); }}
+        onBlur={(e) => { setFocused(false); const parsed = parse(display); onChange(parsed === "" ? 0 : parsed); setDisplay(parsed === "" ? "" : Number(parsed).toLocaleString()); }}
+        onChange={(e) => setDisplay(e.target.value)}
+      />
+    );
+  };
+
+  const normalizePeriodToDate = (p) => {
+    // accept YYYY-MM or YYYY-MM-DD, return YYYY-MM-01
+    if (!p) return null;
+    if (/^\d{4}-\d{2}$/.test(p)) return `${p}-01`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(p)) return p;
+    return null;
+  };
+
+  const loadActiveEmployees = async () => {
+    setCreateErr("");
+    const normalized = normalizePeriodToDate(createForm.period);
+    if (!normalized) {
+      setCreateErr("Period must be in YYYY-MM or YYYY-MM-DD format");
+      return;
+    }
+    try {
+      const { data } = await axios.get(`${API_BASE}/payrolls/active-employees/${normalized}`);
+      // map to editable employee entries
+      const rows = (Array.isArray(data) ? data : []).map(e => ({
+        id: e.id,
+        staff_no: e.staff_no,
+        name: e.name,
+        non_cash_benefit: Number(e.non_cash_benefit || 0),
+        basic_salary: Number(e.basic_salary || 0),
+        house_allowance: Number(e.house_allowance || 0),
+        transport_allowance: Number(e.transport_allowance || 0),
+        other_allowances: Number(e.other_allowances || 0),
+        commission: Number(e.commission || 0),
+        bonus: Number(e.bonus || 0),
+        // accept multiple possible backend field names
+        loan: Number(e.loan ?? e.loan_due ?? e.auto_loan ?? 0),
+        advance: Number(e.advance ?? e.advance_due ?? e.auto_advance ?? 0)
+      }));
+      setCreateForm(f => ({ ...f, employees: rows }));
+    } catch (e) {
+      setCreateErr("Failed to load active employees for that period");
+    }
+  };
+
+  const updateEmployeeField = (idx, field, value) => {
+    setCreateForm(f => {
+      const copy = { ...f, employees: [...(f.employees || [])] };
+      copy.employees[idx] = { ...copy.employees[idx], [field]: value };
+      return copy;
+    });
+  };
+
+  const computeTotals = () => {
+    const totals = { noncash: 0, basic: 0, house: 0, transport: 0, other: 0, commission: 0, bonus: 0, loan: 0, advance: 0, gross: 0 };
+    (createForm.employees || []).forEach(e => {
+      const nc = Number(e.non_cash_benefit) || 0;
+      const b = Number(e.basic_salary) || 0;
+      const h = Number(e.house_allowance) || 0;
+      const t = Number(e.transport_allowance) || 0;
+      const o = Number(e.other_allowances) || 0;
+      const c = Number(e.commission) || 0;
+      const bon = Number(e.bonus) || 0;
+      const loan = Number(e.loan) || 0;
+      const adv = Number(e.advance) || 0;
+      const gross = nc + b + h + t + o + c + bon;
+      totals.noncash += nc; totals.basic += b; totals.house += h; totals.transport += t; totals.other += o; totals.commission += c; totals.bonus += bon; totals.loan += loan; totals.advance += adv; totals.gross += gross;
+    });
+    return totals;
+  };
+
+  const validateRows = () => {
+    const errors = [];
+    (createForm.employees || []).forEach((e, idx) => {
+      const rowErr = [];
+      if (!e.staff_no) rowErr.push('missing staff_no');
+      if (Number(e.non_cash_benefit) < 0) rowErr.push('non_cash_benefit negative');
+      if (Number(e.basic_salary) < 0) rowErr.push('basic_salary negative');
+      if (Number(e.house_allowance) < 0) rowErr.push('house_allowance negative');
+      if (Number(e.transport_allowance) < 0) rowErr.push('transport_allowance negative');
+      if (Number(e.other_allowances) < 0) rowErr.push('other_allowances negative');
+      if (Number(e.loan) < 0) rowErr.push('loan negative');
+      if (Number(e.advance) < 0) rowErr.push('advance negative');
+      if (rowErr.length) errors.push({ idx, staff_no: e.staff_no, errors: rowErr });
+    });
+    return errors;
+  };
+
+  const checkForDuplicates = async () => {
+    setCreateErr("");
+    const normalized = normalizePeriodToDate(createForm.period);
+    if (!normalized) {
+      setCreateErr("Period must be in YYYY-MM or YYYY-MM-DD format");
+      return false;
+    }
+    if (!createForm.employees || createForm.employees.length === 0) {
+      setCreateErr("No employees loaded to create payrolls for");
+      return false;
+    }
+
+    const payload = createForm.employees.map(e => ({
+      staff_no: e.staff_no,
+      period: normalized,
+      non_cash_benefit: Number(e.non_cash_benefit) || 0,
+      basic_salary: Number(e.basic_salary) || 0,
+      house_allowance: Number(e.house_allowance) || 0,
+      transport_allowance: Number(e.transport_allowance) || 0,
+      other_allowances: Number(e.other_allowances) || 0,
+      commission: Number(e.commission) || 0,
+      bonus: Number(e.bonus) || 0,
+      loan: Number(e.loan) || 0,
+      advance: Number(e.advance) || 0,
     }));
 
     try {
-      await axios.post(`${API_BASE}/payrolls/bulk`, payloadA);
-      alert("Payroll created!");
-      setShowCreate(false);
-      axios.get(`${API_BASE}/payrolls/periods`)
-        .then(res => setPeriods(res.data));
-    } catch (err) {
-      let detail = err?.response?.data?.detail ?? err?.response?.data ?? err.message;
-      if (typeof detail === "object") {
-        detail = JSON.stringify(detail, null, 2);
+      // Use dry_run=true to only check for duplicates without creating payrolls
+      await axios.post(`${API_BASE}/payrolls/bulk?dry_run=true`, payload);
+      // No duplicates – safe to proceed to the normal confirm modal
+      return true;
+    } catch (e) {
+      const res = e.response;
+      const data = res?.data;
+
+      // ✅ Correct place to read duplicates: data.detail.duplicates
+      if (res?.status === 409 && data) {
+        const detail = data.detail || {};
+        const duplicates = detail.duplicates || data.duplicates;
+
+        if (Array.isArray(duplicates) && duplicates.length) {
+          setOverwriteCandidates(duplicates);
+          setShowOverwriteModal(true);   // show the "Skip/Overwrite" modal
+          return false;                  // tell caller that duplicates exist
+        }
       }
-      setError(detail);
-      alert("Failed to create payroll.\n" + detail);
+
+      // Any other error: show a simple message instead of raw JSON
+      const msg =
+        typeof data === "string"
+          ? data
+          : typeof data?.detail?.message === "string"
+          ? data.detail.message
+          : e.message || "Failed to check for duplicates";
+
+      setCreateErr(msg);
+      return false;
+    }
+  };
+
+  const submitCreatePayrolls = async () => {
+    setCreateErr("");
+    const normalized = normalizePeriodToDate(createForm.period);
+    if (!normalized) {
+      setCreateErr("Period must be in YYYY-MM or YYYY-MM-DD format");
+      return;
+    }
+    if (!createForm.employees || createForm.employees.length === 0) {
+      setCreateErr("No employees loaded to create payrolls for");
+      return;
+    }
+    const payload = createForm.employees.map(e => ({
+      staff_no: e.staff_no,
+      period: normalized,
+      non_cash_benefit: Number(e.non_cash_benefit) || 0,
+      basic_salary: Number(e.basic_salary) || 0,
+      house_allowance: Number(e.house_allowance) || 0,
+      transport_allowance: Number(e.transport_allowance) || 0,
+      other_allowances: Number(e.other_allowances) || 0,
+      commission: Number(e.commission) || 0,
+      bonus: Number(e.bonus) || 0,
+      loan: Number(e.loan) || 0,
+      advance: Number(e.advance) || 0
+    }));
+
+    setCreating(true);
+    try {
+      const resp = await axios.post(`${API_BASE}/payrolls/bulk`, payload);
+      const results = resp.data || [];
+      setServerResults(results);
+      const successes = results.filter(r => r.success).length;
+      if (successes > 0) {
+        // refresh periods
+        const r = await axios.get(`${API_BASE}/payrolls/periods`);
+        setRows(Array.isArray(r.data) ? r.data : []);
+        // After bulk-create, trigger backend sync for the created period so loan_repayments are written
+        try {
+          const normalizedSync = normalizePeriodToDate(createForm.period);
+          if (normalizedSync) {
+            await axios.post(
+              `${API_BASE}/payrolls/${encodeURIComponent(normalizedSync)}/sync-loan-repayments?username=Triza&password=F%40stAP!123`,
+              {},
+              { headers: { "Content-Type": "application/json" } }
+            );
+          }
+        } catch (_) {
+          // ignore sync failures for now
+        }
+      }
+      // if all success, clear form and close
+      if (results.length > 0 && results.every(r => r.success)) {
+        setShowCreate(false);
+        setCreateForm({ period: "", employees: [] });
+        alert("Payrolls created successfully");
+      } else {
+        setCreateErr("Some rows failed. See results.");
+      }
+    } catch (e) {
+      setCreateErr(typeof e.response?.data === 'string' ? e.response.data : JSON.stringify(e.response?.data) || e.message || "Failed to create payrolls");
     } finally {
       setCreating(false);
     }
   };
 
-  // When showCreate is true, fetch employees and show a table for editing
-  useEffect(() => {
-    if (showCreate) {
-      axios.get(`${API_BASE}/employees/`)
-        .then(res => setForm(f => ({ ...f, employees: res.data })));
-    }
-  }, [showCreate]);
+  const confirmSkipAndSubmit = async () => {
+    setShowOverwriteModal(false);
+    setCreating(true);
+    setCreateErr("");
+    try {
+      const normalized = normalizePeriodToDate(createForm.period);
+      const payload = createForm.employees.map(e => ({
+        staff_no: e.staff_no,
+        period: normalized,
+        non_cash_benefit: Number(e.non_cash_benefit) || 0,
+        basic_salary: Number(e.basic_salary) || 0,
+        house_allowance: Number(e.house_allowance) || 0,
+        transport_allowance: Number(e.transport_allowance) || 0,
+        other_allowances: Number(e.other_allowances) || 0,
+        commission: Number(e.commission) || 0,
+        bonus: Number(e.bonus) || 0,
+        loan: Number(e.loan) || 0,
+        advance: Number(e.advance) || 0
+      }));
 
-  const handleSelect = (id, checked) => {
-    setSelectedIds(ids => checked ? [...ids, id] : ids.filter(x => x !== id));
-  };
-
-  const handleBatchDelete = () => {
-    if (window.confirm("Delete selected payslips?")) {
-      axios.delete(`${API_BASE}/payrolls/${selectedPeriod}/batch-delete`, {
-        data: selectedIds
-      }).then(() => {
-        alert("Deleted!");
-        setDetails(details => details.filter(d => !selectedIds.includes(d.id)));
-        setSelectedIds([]);
-      });
-    }
-  };
-
-  // Render payroll periods table
-  const renderPeriodsTable = () => (
-    <div className="bg-white rounded shadow p-4 mb-4">
-      <h2 className="text-lg font-semibold mb-2">Payroll Periods</h2>
-      <table className="min-w-full border text-sm">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="px-3 py-2 border">Period</th>
-            <th className="px-3 py-2 border">Total Gross</th>
-            <th className="px-3 py-2 border">Net Pay</th>
-            <th className="px-3 py-2 border">Employees</th>
-            <th className="px-3 py-2 border">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(periods && periods.length > 0)
-            ? periods.map((period, i) => (
-                <tr key={period.period ?? i}>
-                  <td className="px-3 py-2 border">{format(new Date(period.period), "MMM yyyy")}</td>
-                  <td className="px-3 py-2 border">KES {period.total_gross?.toLocaleString()}</td>
-                  <td className="px-3 py-2 border">KES {period.net_pay?.toLocaleString()}</td>
-                  <td className="px-3 py-2 border">{period.employees}</td>
-                  <td className="px-3 py-2 border">
-                    <button
-                      className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                      onClick={() => setSelectedPeriod(period.period)}
-                    >
-                      View Payslips
-                    </button>
-                  </td>
-                </tr>
-              ))
-            : (
-                <tr>
-                  <td colSpan={5} className="p-4 text-center text-gray-500">
-                    No records
-                  </td>
-                </tr>
-              )
+      const resp = await axios.post(`${API_BASE}/payrolls/bulk?skip_existing=true`, payload);
+      const results = resp.data || [];
+      setServerResults(results);
+      const successes = results.filter(r => r.success).length;
+      if (successes > 0) {
+        const r = await axios.get(`${API_BASE}/payrolls/periods`);
+        setRows(Array.isArray(r.data) ? r.data : []);
+        // After skip bulk-create, trigger backend sync for the period
+        try {
+          const normalizedSync = normalizePeriodToDate(createForm.period);
+          if (normalizedSync) {
+            await axios.post(
+              `${API_BASE}/payrolls/${encodeURIComponent(normalizedSync)}/sync-loan-repayments?username=Triza&password=F%40stAP!123`,
+              {},
+              { headers: { "Content-Type": "application/json" } }
+            );
           }
-        </tbody>
-      </table>
+        } catch (_) {
+          // ignore sync failures
+        }
+      }
+      const skippedCount = overwriteCandidates.length;
+      const createdCount = successes;
+      if (results.length > 0) {
+        setShowCreate(false);
+        setCreateForm({ period: "", employees: [] });
+        alert(`Payrolls created successfully: ${createdCount} created, ${skippedCount} skipped (already existed)`);
+      } else {
+        setCreateErr("No payrolls were created.");
+      }
+    } catch (e) {
+      setCreateErr(typeof e.response?.data === 'string' ? e.response.data : JSON.stringify(e.response?.data) || e.message || "Failed to create payrolls with skip");
+    } finally {
+      setCreating(false);
+    }
+  };
 
-      <button
-        className="mt-4 px-4 py-2 bg-green-600 text-white rounded"
-        onClick={() => setShowCreate(true)}
-      >
-        Create New Payroll
-      </button>
-    </div>
-  );
+  const confirmOverwriteAndSubmit = async () => {
+    setShowOverwriteModal(false);
+    setCreating(true);
+    setCreateErr("");
+    try {
+      const normalized = normalizePeriodToDate(createForm.period);
+      const payload = createForm.employees.map(e => ({
+        staff_no: e.staff_no,
+        period: normalized,
+        non_cash_benefit: Number(e.non_cash_benefit) || 0,
+        basic_salary: Number(e.basic_salary) || 0,
+        house_allowance: Number(e.house_allowance) || 0,
+        transport_allowance: Number(e.transport_allowance) || 0,
+        other_allowances: Number(e.other_allowances) || 0,
+        commission: Number(e.commission) || 0,
+        bonus: Number(e.bonus) || 0,
+        loan: Number(e.loan) || 0,
+        advance: Number(e.advance) || 0
+      }));
 
-  // Render payroll details for a period
-  const renderPeriodDetails = () => (
-    <div className="bg-white rounded shadow p-4">
-      <button
-        className="mb-4 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
-        onClick={() => setSelectedPeriod(null)}
-      >
-        &larr; Back to Payroll Periods
-      </button>
-      <h2 className="text-xl font-semibold mb-4">
-        Payslips for {new Date(selectedPeriod).toLocaleDateString('en-KE', { year: 'numeric', month: 'long' })}
-      </h2>
-      {loadingDetails ? (
-        <div>Loading payroll details...</div>
-      ) : (
-        <>
-          <div className="mb-4">
-            <button
-              className="bg-red-600 text-white px-3 py-1 rounded"
-              onClick={handleBatchDelete}
-              disabled={selectedIds.length === 0}
-            >
-              Delete Selected
-            </button>
+      const resp = await axios.post(`${API_BASE}/payrolls/bulk?confirm_overwrite=true`, payload);
+      const results = resp.data || [];
+      setServerResults(results);
+      const successes = results.filter(r => r.success).length;
+      if (successes > 0) {
+        const r = await axios.get(`${API_BASE}/payrolls/periods`);
+        setRows(Array.isArray(r.data) ? r.data : []);
+        // After overwrite bulk-create, trigger backend sync for the period
+        try {
+          const normalizedSync = normalizePeriodToDate(createForm.period);
+          if (normalizedSync) {
+            await axios.post(
+              `${API_BASE}/payrolls/${encodeURIComponent(normalizedSync)}/sync-loan-repayments?username=Triza&password=F%40stAP!123`,
+              {},
+              { headers: { "Content-Type": "application/json" } }
+            );
+          }
+        } catch (_) {
+          // ignore sync failures
+        }
+      }
+      if (results.length > 0 && results.every(r => r.success)) {
+        setShowCreate(false);
+        setCreateForm({ period: "", employees: [] });
+        alert("Payrolls created successfully (overwrote existing)");
+      } else {
+        setCreateErr("Some rows failed after overwrite. See results.");
+      }
+    } catch (e) {
+      setCreateErr(typeof e.response?.data === 'string' ? e.response.data : JSON.stringify(e.response?.data) || e.message || "Failed to overwrite payrolls");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (loading) return <div className="p-4">Loading…</div>;
+  if (error) return <div className="p-4 text-red-600">{error}</div>;
+
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-2xl font-semibold">Payroll Dashboard</div>
+        <div className="space-x-2">
+          <Link to="/payroll?create=1" className="inline-block px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded">Create Payroll</Link>
+          <Link to="/payroll/single" className="inline-block px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded">Add Single Payroll</Link>
+        </div>
+      </div>
+      {showCreate && (
+        <div className="mb-4 border rounded p-3 bg-white">
+          <div className="flex items-center space-x-2 mb-3">
+            <label className="text-sm">Period (month):</label>
+            <input
+              type="month"
+              value={createForm.period}
+              onChange={(e) => setCreateForm(f => ({ ...f, period: e.target.value }))}
+              className="px-2 py-1 border rounded"
+              placeholder="2025-11"
+            />
+            <button onClick={loadActiveEmployees} className="px-3 py-1 bg-indigo-600 text-white rounded">Load Active Employees</button>
+            <button onClick={() => { setShowCreate(false); setCreateForm({ period: "", employees: [] }); }} className="px-3 py-1 bg-gray-300 rounded">Cancel</button>
           </div>
-          <table className="min-w-full border text-sm">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="px-3 py-2 border"></th> {/* For checkbox */}
-                <th className="px-3 py-2 border">Staff No</th>
-                <th className="px-3 py-2 border">Employee Name</th>
-                <th className="px-3 py-2 border">Basic Salary</th>
-                <th className="px-3 py-2 border">House Allowance</th>
-                <th className="px-3 py-2 border">Transport Allowance</th>
-                <th className="px-3 py-2 border">Other Allowances</th>
-                <th className="px-3 py-2 border">Commission</th>
-                <th className="px-3 py-2 border">Bonus</th>
-                <th className="px-3 py-2 border">Gross Pay</th>
-                <th className="px-3 py-2 border">Taxable Pay</th>
-                <th className="px-3 py-2 border">NSSF</th>
-                <th className="px-3 py-2 border">NHIF</th>
-                <th className="px-3 py-2 border">AHL</th>
-                <th className="px-3 py-2 border">PAYE</th>
-                <th className="px-3 py-2 border">Loan</th>
-                <th className="px-3 py-2 border">Advance</th>
-                <th className="px-3 py-2 border">Net Pay</th>
-                <th className="px-3 py-2 border">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {details.length === 0 ? (
-                <tr>
-                  <td colSpan={18} className="text-center py-4 text-gray-400">
-                    No payslips found for this period.
-                  </td>
-                </tr>
-              ) : (
-                details.map(emp => {
-                  const roundedNetPay = Math.floor(emp.net_pay / 10) * 10;
-                  return (
-                    <tr key={emp.id}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(emp.id)}
-                          onChange={e => handleSelect(emp.id, e.target.checked)}
-                        />
-                      </td>
-                      <td className="px-3 py-2 border">{emp.staff_no}</td>
-                      <td className="px-3 py-2 border">{emp.name}</td>
-                      <td className="px-3 py-2 border">{emp.basic_salary}</td>
-                      <td className="px-3 py-2 border">{emp.house_allowance}</td>
-                      <td className="px-3 py-2 border">{emp.transport_allowance}</td>
-                      <td className="px-3 py-2 border">{emp.other_allowances}</td>
-                      <td className="px-3 py-2 border">{emp.commission}</td>
-                      <td className="px-3 py-2 border">{emp.bonus}</td>
-                      <td className="px-3 py-2 border">KES {emp.gross_pay?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.taxable_pay?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.nssf?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.shif?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.ahl?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.paye?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.loan?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">{emp.advance?.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">KES {roundedNetPay.toLocaleString()}</td>
-                      <td className="px-3 py-2 border">
-                        <button
-                          className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 mr-2"
-                          onClick={() => setSelectedEmployee({ ...emp, period: selectedPeriod })}
-                        >
-                          View Payslip
-                        </button>
-                        <button
-                          className="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600"
-                          onClick={() => window.location.href = `/payrolls/${selectedPeriod}/edit/${emp.id}`}
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </>
-      )}
-      {selectedEmployee && (
-        <EmployeePayslipModal
-          employee={selectedEmployee}
-          onClose={() => setSelectedEmployee(null)}
-          company={company}
-        />
-      )}
-    </div>
-  );
+          {createErr && <div className="text-red-600 mb-2">{createErr}</div>}
 
-  // Render payroll creation form (simple version)
-  const renderCreatePayroll = () => (
-    <div className="bg-white rounded shadow p-4 mb-4">
-      <h2 className="text-lg font-semibold mb-2">Create New Payroll</h2>
-      <label className="block mb-2">
-        Payroll Period (YYYY-MM):
-        <input
-          type="month"
-          value={form.period}
-          onChange={e => setForm(f => ({ ...f, period: e.target.value }))}
-          className="border px-2 py-1 rounded ml-2"
-        />
-      </label>
-      <div className="overflow-x-auto mt-4">
-        <table className="min-w-full border text-sm">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="px-2 py-1 border">Staff No</th>
-              <th className="px-2 py-1 border">Name</th>
-              <th className="px-2 py-1 border">Basic Salary</th>
-              <th className="px-2 py-1 border">House Allowance</th>
-              <th className="px-2 py-1 border">Transport Allowance</th>
-              <th className="px-2 py-1 border">Other Allowances</th>
-              <th className="px-2 py-1 border">Commission</th>
-              <th className="px-2 py-1 border">Bonus</th>
-              <th className="px-2 py-1 border">Loan</th>
-              <th className="px-2 py-1 border">Advance</th>
+          {createForm.employees && createForm.employees.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="min-w-[1000px] w-full text-sm">
+                <thead className="bg-gray-50 text-gray-700 text-xs uppercase">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Staff No</th>
+                    <th className="px-2 py-2 text-left">Name</th>
+                    <th className="px-2 py-2 text-right">Non-Cash</th>
+                    <th className="px-2 py-2 text-right">Basic</th>
+                    <th className="px-2 py-2 text-right">House</th>
+                    <th className="px-2 py-2 text-right">Transport</th>
+                    <th className="px-2 py-2 text-right">Other</th>
+                    <th className="px-2 py-2 text-right">Commission</th>
+                    <th className="px-2 py-2 text-right">Bonus</th>
+                    <th className="px-2 py-2 text-right">Loan</th>
+                    <th className="px-2 py-2 text-right">Advance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {createForm.employees.map((emp, idx) => {
+                    const invalid = validateRows().some(v => v.idx === idx);
+                    return (
+                    <tr key={emp.id || idx} className={invalid ? 'bg-red-50' : ''}>
+                      <td className="px-2 py-1">{emp.staff_no}</td>
+                      <td className="px-2 py-1">{emp.name}</td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.non_cash_benefit} onChange={(v) => updateEmployeeField(idx, 'non_cash_benefit', v)} className="w-24 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.basic_salary} onChange={(v) => updateEmployeeField(idx, 'basic_salary', v)} className="w-24 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.house_allowance} onChange={(v) => updateEmployeeField(idx, 'house_allowance', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.transport_allowance} onChange={(v) => updateEmployeeField(idx, 'transport_allowance', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.other_allowances} onChange={(v) => updateEmployeeField(idx, 'other_allowances', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.commission} onChange={(v) => updateEmployeeField(idx, 'commission', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.bonus} onChange={(v) => updateEmployeeField(idx, 'bonus', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.loan} onChange={(v) => updateEmployeeField(idx, 'loan', v)} className="w-20 text-right" /></td>
+                      <td className="px-2 py-1 text-right"><MoneyInput value={emp.advance} onChange={(v) => updateEmployeeField(idx, 'advance', v)} className="w-20 text-right" /></td>
+                    </tr>
+                  )})}
+                </tbody>
+                <tfoot className="bg-gray-50">
+                  <tr>
+                    <td className="px-2 py-2 font-semibold">Totals</td>
+                    <td className="px-2 py-2" />
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().noncash)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().basic)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().house)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().transport)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().other)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().commission)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().bonus)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().loan)}</td>
+                    <td className="px-2 py-2 text-right">{fmt(computeTotals().advance)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              <div className="mt-3 flex items-center space-x-2">
+                <button disabled={creating} onClick={async () => {
+                  const validationErrors = validateRows();
+                  if (validationErrors.length > 0) {
+                    setCreateErr(`Validation errors: ${validationErrors.map(v => `${v.staff_no}: ${v.errors.join(', ')}`).join('; ')}`);
+                    return;
+                  }
+                  const hasDuplicates = !(await checkForDuplicates());
+                  if (!hasDuplicates) {
+                    setShowConfirm(true);
+                  }
+                }} className="px-3 py-1 bg-green-600 text-white rounded">Prepare Create</button>
+                <button onClick={() => { setCreateForm({ period: '', employees: [] }); }} className="px-3 py-1 bg-gray-200 rounded">Clear</button>
+                {serverResults && (
+                  <div className="ml-4 text-sm text-red-600">Some rows failed — see results below after submit</div>
+                )}
+              </div>
+              {showConfirm && (
+                <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30">
+                  <div className="bg-white p-4 rounded shadow-md w-[700px]">
+                    <h3 className="text-lg font-semibold mb-2">Confirm create payrolls</h3>
+                    <div className="mb-3">Employees: <strong>{createForm.employees.length}</strong></div>
+                    <div className="mb-3">Total gross: <strong>KES {fmt(computeTotals().gross)}</strong></div>
+                    <div className="flex justify-end space-x-2">
+                      <button onClick={() => setShowConfirm(false)} className="px-3 py-1 bg-gray-200 rounded">Cancel</button>
+                      <button onClick={async () => {
+                        setShowConfirm(false);
+                        await submitCreatePayrolls();
+                      }} className="px-3 py-1 bg-green-600 text-white rounded">{creating ? 'Creating…' : 'Confirm and Create'}</button>
+                    </div>
+                    {serverResults && (
+                      <div className="mt-3 text-sm">
+                        <div>Results:</div>
+                        <ul className="list-disc ml-5 text-xs">
+                          {serverResults.map((r, i) => (
+                            <li key={i} className={r.success ? 'text-green-700' : 'text-red-700'}>
+                              {r.staff_no}: {r.success ? `Created (id ${r.payroll_id})` : r.errors.join(', ')}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {showOverwriteModal && (
+                <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30">
+                  <div className="bg-white p-4 rounded shadow-md w-[700px]">
+                    <h3 className="text-lg font-semibold mb-2">Duplicate payrolls detected</h3>
+                    <div className="mb-3 text-sm">Payrolls already exist for some staff for this period. Choose how to proceed:</div>
+                    <div className="max-h-40 overflow-auto mb-3 text-xs bg-gray-50 p-2 rounded">
+                      <ul className="list-disc ml-5">
+                        {overwriteCandidates.map((d, i) => (
+                          <li key={i}>{d.staff_no} (period: {d.period}) — existing id {d.existing_id}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex justify-end space-x-2">
+                      <button onClick={() => setShowOverwriteModal(false)} className="px-3 py-1 bg-gray-200 rounded">Cancel</button>
+                      <button onClick={confirmSkipAndSubmit} className="px-3 py-1 bg-blue-600 text-white rounded">Skip Existing & Create Others</button>
+                      <button onClick={confirmOverwriteAndSubmit} className="px-3 py-1 bg-red-600 text-white rounded">Overwrite All</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="overflow-x-auto border rounded-lg">
+        <table className="min-w-[1200px] w-full text-sm">
+          <thead className="bg-gray-50 text-gray-700 text-xs uppercase">
+            <tr>
+              <th className="px-3 py-2 text-left whitespace-nowrap">Payroll Period</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Total Gross</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Total NHIF/SHIF</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Total NSSF</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">PAYE</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">AHL</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Total Other Deductions</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Net Pay</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">ER NSSF</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">ER AHL</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">NITA</th>
+              <th className="px-3 py-2 text-center whitespace-nowrap">Actions</th>
             </tr>
           </thead>
-          <tbody>
-            {form.employees.map((emp, idx) => (
-              <tr key={emp.staff_no}>
-                <td className="px-2 py-1 border">{emp.staff_no}</td>
-                <td className="px-2 py-1 border">{emp.name}</td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.basic_salary}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].basic_salary = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
+          <tbody className="divide-y">
+            {rows.map((r) => (
+              <tr key={r.period}>
+                <td className="px-3 py-2 whitespace-nowrap">
+                  {format(new Date(r.period), "MMM yyyy")}
                 </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.house_allowance}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].house_allowance = val;
-                        return { ...f, employees: updated };
-                      });
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_gross)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_shif)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_nssf)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_paye)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_ahl)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_other_deductions)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_net)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_nssf_employer)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_ahl_employer)}</td>
+                <td className="px-3 py-2 text-right whitespace-nowrap">KES {fmt(r.total_nita_employer)}</td>
+                <td className="px-3 py-2 text-center whitespace-nowrap">
+                  <a
+                    className="inline-block px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded"
+                    href={`/payrolls/${String(r.period).slice(0,10)}/payslips`}
+                  >
+                    View Payslips
+                  </a>
+                  <button
+                    onClick={async () => {
+                      const ym = String(r.period).slice(0,7);
+                      const ymd = `${ym}-01`;
+                      try {
+                        await axios.post(
+                          `${API_BASE}/payrolls/${encodeURIComponent(ymd)}/sync-loan-repayments?username=Triza&password=F%40stAP!123`,
+                          {},
+                          { headers: { "Content-Type": "application/json" } }
+                        );
+                        // refresh periods so totals reflect new repayments
+                        const refreshed = await axios.get(`${API_BASE}/payrolls/periods`);
+                        setRows(Array.isArray(refreshed.data) ? refreshed.data : []);
+                        // notify loans widgets to refresh if open
+                        try { window.dispatchEvent(new CustomEvent("loans:refresh", { detail: {} })); } catch {}
+                        alert("Loan repayments synced for " + ymd);
+                      } catch (e) {
+                        console.error('Sync failed', e?.response?.data || e?.message);
+                        alert("Failed to sync loan repayments for " + ymd);
+                      }
                     }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.transport_allowance}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].transport_allowance = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.other_allowances}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].other_allowances = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.commission}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].commission = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.bonus}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].bonus = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.loan}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].loan = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
-                </td>
-                <td className="px-2 py-1 border">
-                  <input
-                    type="number"
-                    value={emp.advance}
-                    onChange={e => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setForm(f => {
-                        const updated = [...f.employees];
-                        updated[idx].advance = val;
-                        return { ...f, employees: updated };
-                      });
-                    }}
-                    className="border px-1 py-1 rounded w-20"
-                  />
+                    className="ml-2 inline-block px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded"
+                  >
+                    Sync loan repayments
+                  </button>
+                  <button
+                    onClick={() => handleDelete(r.period)}
+                    className="ml-2 inline-block px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded"
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
+            {rows.length === 0 && (
+              <tr>
+                <td className="px-3 py-6 text-center text-gray-500" colSpan={12}>
+                  No payrolls yet.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
-      <button
-        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded"
-        onClick={handleCreatePayroll}
-        disabled={creating || !form.period}
-      >
-        {creating ? "Creating..." : "Confirm & Create Payroll"}
-      </button>
-      <button
-        className="mt-2 ml-2 px-4 py-2 bg-gray-200 rounded"
-        onClick={() => setShowCreate(false)}
-      >
-        Cancel
-      </button>
     </div>
   );
-
-  return (
-    <div>
-      {!selectedPeriod && !showCreate && renderPeriodsTable()}
-      {showCreate && renderCreatePayroll()}
-      {selectedPeriod && renderPeriodDetails()}
-    </div>
-  );
-};
-
-// Modal for viewing payslip
-const EmployeePayslipModal = ({ employee, onClose, company }) => {
-  // Defensive date formatting
-  let payslipPeriod = "Invalid Date";
-  if (employee.period) {
-    const dateObj = new Date(employee.period);
-    if (!isNaN(dateObj)) {
-      payslipPeriod = format(dateObj, "MMMM yyyy");
-    }
-  }
-
-  const handlePrint = () => window.print();
-
-  const handleEmail = () => {
-    axios.post(`${API_BASE}/payrolls/${employee.period}/email`, { employee_id: employee.id })
-      .then(() => alert("Payslip sent!"))
-      .catch(() => alert("Failed to send payslip."));
-  };
-
-  const handleEdit = () => {
-    window.location.href = `/payrolls/${employee.period}/edit/${employee.id}`;
-  };
-
-  const handleDelete = () => {
-    if (window.confirm("Are you sure you want to delete this payslip?")) {
-      axios.delete(`${API_BASE}/payrolls/${employee.period}/employee/${employee.id}`)
-        .then(() => alert("Payslip deleted!"))
-        .catch(() => alert("Failed to delete payslip."));
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 flex items-center justify-center z-50 print-payslip">
-      <div className="bg-black opacity-50 absolute inset-0"></div>
-      <div className="bg-white rounded shadow-lg p-6 max-w-lg w-full z-10 max-h-[80vh] overflow-y-auto">
-        {/* Company Logo and Name */}
-        {company && (
-          <div className="mb-4 flex items-center">
-            {company.logo_url && (
-              <img src={company.logo_url} alt="Company Logo" className="h-12 mr-4" />
-            )}
-            <div>
-              <div className="font-bold text-lg">{company.company_name}</div>
-              <div className="text-sm">{company.address}</div>
-              <div className="text-sm">{company.email}</div>
-              <div className="text-sm">{company.phone}</div>
-            </div>
-          </div>
-        )}
-        {/* Employee Info */}
-        <div className="mb-4">
-          <div className="flex justify-between">
-            <span className="font-semibold">Employee Name:</span>
-            <span>{employee.name}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="font-semibold">Staff No:</span>
-            <span>{employee.staff_no}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="font-semibold">Email:</span>
-            <span>{employee.email}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="font-semibold">Payslip No:</span>
-            <span>{employee.payslip_number}</span>
-          </div>
-        </div>
-        {/* Payslip Table */}
-        <div className="border-t pt-2">
-          {/* Earnings */}
-          <div className="font-semibold mb-2">Earnings</div>
-          <div className="flex justify-between py-1">
-            <span>Basic Salary</span>
-            <span>KES {employee.basic_salary?.toLocaleString()}</span>
-          </div>
-          {employee.house_allowance > 0 && (
-            <div className="flex justify-between py-1">
-              <span>House Allowance</span>
-              <span>KES {employee.house_allowance.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.transport_allowance > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Transport Allowance</span>
-              <span>KES {employee.transport_allowance.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.other_allowances > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Other Allowances</span>
-              <span>KES {employee.other_allowances.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.commission > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Commission</span>
-              <span>KES {employee.commission.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.bonus > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Bonus</span>
-              <span>KES {employee.bonus.toLocaleString()}</span>
-            </div>
-          )}
-          <div className="flex justify-between py-1 font-bold border-t mt-2">
-            <span>Gross Pay</span>
-            <span>KES {employee.gross_pay?.toLocaleString()}</span>
-          </div>
-          {/* Deductions */}
-          <div className="font-semibold mt-4 mb-2">Deductions</div>
-          {employee.paye > 0 && (
-            <div className="flex justify-between py-1">
-              <span>PAYE</span>
-              <span>KES {employee.paye.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.nssf > 0 && (
-            <div className="flex justify-between py-1">
-              <span>NSSF</span>
-              <span>KES {employee.nssf.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.shif > 0 && (
-            <div className="flex justify-between py-1">
-              <span>NHIF</span>
-              <span>KES {employee.shif.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.ahl > 0 && (
-            <div className="flex justify-between py-1">
-              <span>AHL</span>
-              <span>KES {employee.ahl.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.loan > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Loan</span>
-              <span>KES {employee.loan.toLocaleString()}</span>
-            </div>
-          )}
-          {employee.advance > 0 && (
-            <div className="flex justify-between py-1">
-              <span>Advance</span>
-              <span>KES {employee.advance.toLocaleString()}</span>
-            </div>
-          )}
-          <div className="flex justify-between py-1 font-bold border-t mt-2">
-            <span>Net Pay</span>
-            <span>KES {Math.floor(employee.net_pay / 10) * 10}</span>
-          </div>
-        </div>
-        {/* Personal Info Section */}
-        <div className="mt-6 border-t-2 border-black pt-2">
-          <div className="font-semibold mb-1">PERSONAL INFO.:</div>
-          <table className="w-full text-xs border-separate" style={{ borderSpacing: 0 }}>
-            <tbody>
-              <tr className="bg-gray-50">
-                <td className="py-1 px-2">Payment Mode:</td>
-                <td className="py-1 px-2">{employee.payment_mode || "Bank Transfer"}</td>
-                <td className="py-1 px-2">ID:</td>
-                <td className="py-1 px-2">{employee.id_number || "-"}</td>
-              </tr>
-              <tr>
-                <td className="py-1 px-2">Bank Name:</td>
-                <td className="py-1 px-2">{employee.bank_name || "-"}</td>
-                <td className="py-1 px-2">PIN:</td>
-                <td className="py-1 px-2">{employee.kra_pin || "-"}</td>
-              </tr>
-              <tr className="bg-gray-50">
-                <td className="py-1 px-2">Bank Branch:</td>
-                <td className="py-1 px-2">{employee.branch_name || "-"}</td>
-                <td className="py-1 px-2">NHIF:</td>
-                <td className="py-1 px-2">{employee.nhif_number || "-"}</td>
-              </tr>
-              <tr>
-                <td className="py-1 px-2">Bank Acc:</td>
-                <td className="py-1 px-2">{employee.bank_account || "-"}</td>
-                <td className="py-1 px-2">NSSF:</td>
-                <td className="py-1 px-2">{employee.nssf_number || "-"}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div className="border-b-2 border-black mt-1"></div>
-        </div>
-        {/* Stamp and Date */}
-        <div className="mt-8 flex items-center">
-          <div className="border border-dashed border-gray-400 w-32 h-20 flex items-center justify-center text-gray-500">
-            Stamp
-          </div>
-          <div className="ml-8 text-sm text-gray-600">
-            Date: {new Date().toLocaleDateString()}
-          </div>
-        </div>
-        {/* Buttons */}
-        <div className="flex gap-2 mt-6">
-          <button onClick={handlePrint} className="bg-blue-600 text-white px-3 py-1 rounded">Print</button>
-          <button onClick={handleEmail} className="bg-green-600 text-white px-3 py-1 rounded">Email</button>
-          <button onClick={handleEdit} className="bg-yellow-500 text-white px-3 py-1 rounded">Edit</button>
-          <button onClick={handleDelete} className="bg-red-600 text-white px-3 py-1 rounded">Delete</button>
-        </div>
-        <button
-          onClick={onClose}
-          className="mt-4 px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  );
-};
-
-export default PayrollTab;
+}

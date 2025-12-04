@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+import pydantic as _pyd
+from pydantic import BaseModel, ConfigDict
 from datetime import date
 
 class IncrementBase(BaseModel):
@@ -6,9 +7,12 @@ class IncrementBase(BaseModel):
     gross_pay: float
 
 class IncrementCreate(IncrementBase):
-    pass
+    end_date: date | None = None
 
 class IncrementSchema(IncrementBase):
     id: int
-    class Config:
-        orm_mode = True
+    end_date: date | None = None
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

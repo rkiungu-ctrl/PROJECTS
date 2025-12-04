@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useParams, useNavigate } from "react-router-dom";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 
 function formatAmount(num, decimals = 2) {
   return Number(num || 0).toLocaleString(undefined, {
@@ -228,45 +228,76 @@ const PurchaseForm = () => {
       return t ? t.account_code : selected || null;
     };
 
+    const cleanedLines = lines.map((l) => {
+      // Ensure product_id is a proper integer if present
+      const pid = l.product_id ? Number(l.product_id) : null;
+
+      // Decide type: Product if product_id exists, otherwise fallback to existing or Service
+      const type = pid ? "Product" : (l.type || "Service");
+
+      // Resolve item name: for products use SKU or name, otherwise keep whatever user typed
+      let item = l.item;
+      if (type === "Product" && pid) {
+        const prod = products.find((p) => Number(p.id) === pid);
+        item = prod ? (prod.sku || prod.name) : item;
+      }
+
+      // Map VAT/Excise selection to actual tax code (account_code)
+      const vat_code = getTaxCode(l.vat_code, "VAT");
+      const excise_code = getTaxCode(l.excise_code, "EXCISE");
+
+      // Build line payload – DO NOT send frontend-only _id
+      const linePayload = {
+        // Only send id when it's a real numeric id (for edits)
+        ...(typeof l.id === "number" ? { id: l.id } : {}),
+        ...(pid ? { product_id: pid } : {}),
+        type,
+        item: item || null,
+        description: l.description || null,
+        account_code: l.account_code || null,
+        quantity: Number(l.quantity) || 0,
+        unit_price: Number(l.unit_price) || 0,
+        vat_code,
+        excise_code,
+      };
+
+      return linePayload;
+    });
+
+    // Just to be super safe: prevent sending a completely empty array by forcing one blank line
+    if (!cleanedLines.length) {
+      cleanedLines.push({
+        type: "Service",
+        product_id: null,
+        item: null,
+        description: null,
+        account_code: null,
+        quantity: 0,
+        unit_price: 0,
+        vat_code: null,
+        excise_code: null,
+      });
+    }
+
     const payload = {
       supplier_id: supplierId,
       invoice_date: invoiceDate,
       reference: ref,
       currency_code: currencyCode,
-      cu_inv_number: cuInvNumber,
-      lines: lines.map(l => {
-        // Ensure product_id is an integer if present
-        const pid = l.product_id ? Number(l.product_id) : null;
-        // Set type to "Product" if product_id is present, otherwise "Service"
-        const type = pid ? "Product" : (l.type || "Service");
-        // Set item to product name or SKU, if product, otherwise leave as is
-        let item = l.item;
-        if (type === "Product" && pid) {
-          const prod = products.find(p => p.id === pid);
-          item = prod ? (prod.sku || prod.name) : item;
-        }
-        // Always include id if not null/undefined
-        const linePayload = {
-          ...((l.id !== undefined && l.id !== null) ? { id: l.id } : {}),
-          ...(pid ? { product_id: pid } : {}),
-          type,
-          item,
-          description: l.description,
-          account_code: l.account_code,
-          quantity: Number(l.quantity) || 0,
-          unit_price: Number(l.unit_price) || 0,
-          vat_code: getTaxCode(l.vat_code, "VAT"),
-          excise_code: getTaxCode(l.excise_code, "EXCISE"),
-        };
-        return linePayload;
-      }),
+      cu_inv_number: cuInvNumber || null,
+      lines: cleanedLines,
       is_recurring: isRecurring,
-      recurrence_interval: `${recurrenceIntervalValue} ${recurrenceType}`,
-      recurrence_day_option: recurrenceDayOption,
-      recurrence_end_type: recurrenceEndType,
-      recurrence_end_date: recurrenceEndType === "end_date" ? recurrenceEndDate : null,
-      next_issue_date: nextIssueDate,
-      exchange_rate: currencyCode !== baseCurrency ? Number(exchangeRate) || 1 : null,
+      recurrence_interval: isRecurring ? `${recurrenceIntervalValue} ${recurrenceType}` : null,
+      recurrence_day_option: isRecurring ? recurrenceDayOption : null,
+      recurrence_end_type: isRecurring ? recurrenceEndType : null,
+      recurrence_end_date:
+        isRecurring && recurrenceEndType === "end_date" ? recurrenceEndDate : null,
+      next_issue_date: isRecurring ? nextIssueDate : null,
+      // IMPORTANT: always send a sane numeric exchange rate
+      exchange_rate:
+        currencyCode !== baseCurrency
+          ? Number(exchangeRate || 1)
+          : 1,
     };
     // Debug
     console.log("Payload:", payload);

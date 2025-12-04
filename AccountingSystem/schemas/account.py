@@ -1,11 +1,8 @@
-from pydantic import BaseModel
+import pydantic as _pyd
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import date
-
 # --- Account Schemas ---
-
-from typing import Optional
-from pydantic import BaseModel
 
 class AccountBase(BaseModel):
     account_code: str
@@ -41,9 +38,10 @@ class AccountOut(BaseModel):
     is_control_account: bool
     is_physical: bool
     parent_account_code: Optional[str] = None  # <-- needed
-
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True
 
 # --- Journal Schemas ---
 

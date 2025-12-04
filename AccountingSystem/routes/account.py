@@ -8,7 +8,8 @@ import io
 from datetime import datetime
 
 from database import get_db
-from models import Account, BankTransaction  # <-- keep ONLY this import; remove 'from model import Account'
+from models import Account
+from models.bank_transaction_v2 import BankTransactionV2
 from schemas.account import AccountCreate, AccountOut, AccountUpdate
 
 router = APIRouter(
@@ -160,6 +161,26 @@ def search_accounts(query: str = Query(..., min_length=1), db: Session = Depends
         .all()
     )
     # keep the lean payload your UI already expects
+    return [{"account_code": a.account_code, "name": a.name} for a in results]
+
+# Alias without trailing slash and supporting 'q' param (used by Journal form)
+@router.get("/search")
+def search_accounts_alias(
+    q: Optional[str] = Query(None, min_length=1, description="Search text used by journal dropdown"),
+    query: Optional[str] = Query(None, min_length=1, description="Legacy param name"),
+    db: Session = Depends(get_db),
+):
+    term = (q or query)
+    if not term:
+        raise HTTPException(status_code=422, detail="Missing search term 'q' or 'query'")
+    like = f"%{term}%"
+    results = (
+        db.query(Account)
+        .filter((Account.name.ilike(like)) | (Account.account_code.ilike(like)))
+        .order_by(Account.account_code)
+        .limit(25)
+        .all()
+    )
     return [{"account_code": a.account_code, "name": a.name} for a in results]
 
 
@@ -332,8 +353,16 @@ async def import_bank_transactions(file: UploadFile = File(...), db: Session = D
     errors = []
     for row in reader:
         try:
+            # Parse date using standardized function
+            from utils.date_parser import validate_import_date
+            try:
+                parsed_date = validate_import_date(row["Date"], f"Transaction row")
+            except ValueError as e:
+                errors.append(str(e))
+                continue
+                
             tx = BankTransaction(
-                date=datetime.strptime(row["Date"], "%Y-%m-%d").date(),
+                date=parsed_date,
                 description=row["Description"],
                 amount=float(row["Amount"]),
                 account_id=int(row["Account ID"]),

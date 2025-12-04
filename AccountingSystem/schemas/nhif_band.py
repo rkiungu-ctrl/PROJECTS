@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+import pydantic as _pyd
+from pydantic import BaseModel, ConfigDict
 from datetime import date
 from typing import Optional
 
@@ -17,6 +18,7 @@ class NHIFBandUpdate(NHIFBandBase):
 
 class NHIFBandOut(NHIFBandBase):
     id: int
-
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

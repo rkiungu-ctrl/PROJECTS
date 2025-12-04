@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../lib/api";
 const GET_PROFILE = `${API_BASE}/company/profile`;
 
 export function absoluteAsset(url) {

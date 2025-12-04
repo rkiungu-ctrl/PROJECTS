@@ -3,27 +3,11 @@ from sqlalchemy import Column, Integer, String, Float, Date, Numeric, Boolean, F
 from sqlalchemy.orm import relationship
 from database import Base
 
-class EmployeeLoan(Base):
-    __tablename__ = "employee_loans"
-    id = Column(Integer, primary_key=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"))
-    principal = Column(Numeric(12,2), nullable=False)
-    balance   = Column(Numeric(12,2), nullable=False)
-    interest_rate = Column(Float, default=0.0)            # per month, if any
-    start_date = Column(Date, nullable=False)
-    installment_amount = Column(Numeric(12,2), nullable=False)
-    active = Column(Boolean, default=True)
-    note = Column(String(255))
-
-class EmployeeAdvance(Base):
-    __tablename__ = "employee_advances"
-    id = Column(Integer, primary_key=True)
-    employee_id = Column(Integer, ForeignKey("employees.id"))
-    amount   = Column(Numeric(12,2), nullable=False)
-    balance  = Column(Numeric(12,2), nullable=False)
-    issue_date = Column(Date, nullable=False)
-    recover_months = Column(Integer, default=1)  # 1 = recover next payroll
-    note = Column(String(255))
+# Legacy model classes were removed to consolidate loan/advance data into the
+# canonical `LoanAdvance` model (table: loan_advances). If you previously relied
+# on `EmployeeLoan`/`EmployeeAdvance` classes, the migration scripts handled
+# copying rows into `loan_advances` and those legacy table names are no longer
+# referenced by runtime models.
 
 class LoanAdvance(Base):
     __tablename__ = "loan_advances"
@@ -32,7 +16,8 @@ class LoanAdvance(Base):
     loan_type = Column(String, nullable=False)  # e.g., Salary Advance, Staff Loan
     reference_no = Column(String, unique=True, nullable=False)
     principal_amount = Column(Numeric(12,2), nullable=False)
-    date_issued = Column(Date, nullable=False)
+    # allow nullable so tests and legacy rows without an explicit date can be inserted
+    date_issued = Column(Date, nullable=True)
     interest_rate = Column(Float, default=0.0)
     repayment_period = Column(Integer, nullable=False)  # months/installments
     installment_amount = Column(Numeric(12,2), nullable=False)

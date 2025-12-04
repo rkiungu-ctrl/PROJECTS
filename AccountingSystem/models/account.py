@@ -41,5 +41,8 @@ class AccountSettings(Base):
     ahl_employer_liability_account_id = Column(String)
     nita_expense_account_id = Column(String)
     nita_payable_account_id = Column(String)
+    # New settings for loans and employee clearing override
+    loans_asset_account_id = Column(String, nullable=True)
+    employee_clearing_account_id = Column(String, nullable=True)
 
 

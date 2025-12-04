@@ -15,6 +15,8 @@ from models.nhif_band import NHIFBand
 from schemas.nhif_band import NHIFBandCreate, NHIFBandUpdate, NHIFBandOut
 from models.paye import PayeTable, PayeBand
 from schemas.paye import PayeTableCreate, PayeTableOut
+from models.ahl import AHLTable
+from schemas.ahl import AHLTable as AHLTableSchema
 from models.shif_setting import SHIFSetting
 from schemas.shif_setting import SHIFSettingCreate, SHIFSettingOut
 
@@ -159,35 +161,192 @@ router.include_router(nssf)
 # -------------------------
 # PAYE settings
 # -------------------------
+from sqlalchemy.orm import joinedload
+
 paye = APIRouter(prefix="/paye", tags=["Payroll Settings"])
 
-@paye.get("", response_model=list[PayeTableOut])
+@paye.get("/", response_model=list[PayeTableOut])
 def list_paye(db: Session = Depends(get_db)):
-    return db.query(PayeTable).order_by(PayeTable.start_date).all()
+    # Return ONLY PayeTable ORM rows, with nested bands eagerly loaded
+    tables = (
+        db.query(PayeTable)
+        .options(joinedload(PayeTable.bands))
+        .order_by(PayeTable.start_date.asc())
+        .all()
+    )
+    return tables
 
-@paye.post("", response_model=PayeTableOut)
+@paye.get("/{id}", response_model=PayeTableOut)
+def get_paye(id: int, db: Session = Depends(get_db)):
+    table = (
+        db.query(PayeTable)
+        .options(joinedload(PayeTable.bands))
+        .filter(PayeTable.id == id)
+        .first()
+    )
+    if not table:
+        raise HTTPException(404, "PAYE table not found")
+    return table
+
+@paye.post("/", response_model=PayeTableOut)
 def create_paye(payload: PayeTableCreate, db: Session = Depends(get_db)):
-    overlap = (db.query(PayeTable)
-                 .filter(PayeTable.start_date <= (payload.end_date or payload.start_date),
-                         (PayeTable.end_date == None) | (PayeTable.end_date >= payload.start_date))
-                 .first())
-    if overlap: raise HTTPException(400, "Overlapping PAYE period.")
+    # overlap check
+    overlap = (
+        db.query(PayeTable)
+        .filter(
+            PayeTable.start_date <= (payload.end_date or payload.start_date),
+            (PayeTable.end_date == None) | (PayeTable.end_date >= payload.start_date),
+        )
+        .first()
+    )
+    if overlap:
+        raise HTTPException(400, "Overlapping PAYE period.")
+
     table = PayeTable(
         start_date=payload.start_date,
         end_date=payload.end_date,
         personal_relief=payload.personal_relief,
         insurance_relief_rate=payload.insurance_relief_rate,
         insurance_relief_cap=payload.insurance_relief_cap,
-        bands=[PayeBand(**b.model_dump()) for b in payload.bands]
     )
-    db.add(table); db.commit(); db.refresh(table)
+    db.add(table)
+    db.flush()  # get table.id before adding bands
+
+    for b in payload.bands:
+        db.add(
+            PayeBand(
+                table_id=table.id,
+                lower=b.lower,
+                upper=b.upper,
+                rate=b.rate,  # store decimal, e.g. 0.10
+            )
+        )
+
+    db.commit()
+    # re-read with bands
+    table = (
+        db.query(PayeTable)
+        .options(joinedload(PayeTable.bands))
+        .filter(PayeTable.id == table.id)
+        .first()
+    )
     return table
 
+@paye.put("/{id}", response_model=PayeTableOut)
+def update_paye(id: int, payload: PayeTableCreate, db: Session = Depends(get_db)):
+    table = db.query(PayeTable).filter(PayeTable.id == id).first()
+    if not table:
+        raise HTTPException(404, "PAYE table not found")
+
+    # overlap check (exclude self)
+    overlap = (
+        db.query(PayeTable)
+        .filter(
+            PayeTable.id != id,
+            PayeTable.start_date <= (payload.end_date or payload.start_date),
+            (PayeTable.end_date == None) | (PayeTable.end_date >= payload.start_date),
+        )
+        .first()
+    )
+    if overlap:
+        raise HTTPException(400, "Overlapping PAYE period.")
+
+    table.start_date = payload.start_date
+    table.end_date = payload.end_date
+    table.personal_relief = payload.personal_relief
+    table.insurance_relief_rate = payload.insurance_relief_rate
+    table.insurance_relief_cap = payload.insurance_relief_cap
+
+    # replace bands
+    db.query(PayeBand).filter(PayeBand.table_id == id).delete()
+    db.flush()
+    for b in payload.bands:
+        db.add(
+            PayeBand(
+                table_id=id,
+                lower=b.lower,
+                upper=b.upper,
+                rate=b.rate,
+            )
+        )
+
+    db.commit()
+    table = (
+        db.query(PayeTable)
+        .options(joinedload(PayeTable.bands))
+        .filter(PayeTable.id == id)
+        .first()
+    )
+    return table
+
+@paye.delete("/{id}")
+def delete_paye(id: int, db: Session = Depends(get_db)):
+    table = db.query(PayeTable).filter(PayeTable.id == id).first()
+    if not table:
+        raise HTTPException(404, "PAYE table not found")
+    # bands have FK; if you didn't set cascade on relationship,
+    # delete bands explicitly first:
+    db.query(PayeBand).filter(PayeBand.table_id == id).delete()
+    db.delete(table)
+    db.commit()
+    return {"message": "Deleted"}
+
+# Register PAYE sub-router so endpoints are available under /payroll-settings/paye
 router.include_router(paye)
 
 # -------------------------
 # NHIF Bands
 # -------------------------
+ahl = APIRouter(prefix="/ahl", tags=["Payroll Settings"])
+
+@ahl.get("/", response_model=list[AHLTableSchema])
+def list_ahl_tables(db: Session = Depends(get_db)):
+    return db.query(AHLTable).order_by(AHLTable.start_date.desc()).all()
+
+
+@ahl.post("/", response_model=AHLTableSchema)
+def create_ahl_table(payload: AHLTableSchema, db: Session = Depends(get_db)):
+    rec = AHLTable(
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        employee_rate=payload.employee_rate,
+        employer_rate=payload.employer_rate,
+        relief_rate=payload.relief_rate,
+        relief_cap_month=payload.relief_cap_month,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
+@ahl.put("/{id}", response_model=AHLTableSchema)
+def update_ahl_table(id: int, payload: AHLTableSchema, db: Session = Depends(get_db)):
+    rec = db.query(AHLTable).filter(AHLTable.id == id).first()
+    if not rec:
+        raise HTTPException(404, "AHL table not found")
+    rec.start_date = payload.start_date
+    rec.end_date = payload.end_date
+    rec.employee_rate = payload.employee_rate
+    rec.employer_rate = payload.employer_rate
+    rec.relief_rate = payload.relief_rate
+    rec.relief_cap_month = payload.relief_cap_month
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
+@ahl.delete("/{id}")
+def delete_ahl_table(id: int, db: Session = Depends(get_db)):
+    rec = db.query(AHLTable).filter(AHLTable.id == id).first()
+    if not rec:
+        raise HTTPException(404, "AHL table not found")
+    db.delete(rec)
+    db.commit()
+    return {"message": "Deleted"}
+
+router.include_router(ahl)
+
 nhif = APIRouter(prefix="/nhif", tags=["Payroll Settings"])
 
 @nhif.get("/", response_model=list[NHIFBandOut])

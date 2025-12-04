@@ -7,6 +7,7 @@ class Increment(Base):
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"))
     start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=True)
     gross_pay = Column(Float, nullable=False)
 
     employee = relationship("Employee", back_populates="increments")

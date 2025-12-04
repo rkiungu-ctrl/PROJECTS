@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
+import { formatDateDDMMYYYY } from "../../utils/dateUtils";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../../lib/api";
 
 export default function ViewInvoiceModal({ invoice, onClose }) {
   const [company, setCompany] = useState(null);
@@ -64,7 +65,7 @@ export default function ViewInvoiceModal({ invoice, onClose }) {
             <div className="font-semibold">INVOICE</div>
             <div className="text-sm">Invoice #: {invoice.invoice_number}</div>
             <div className="text-sm">CU INV Number: {invoice.cu_inv_number || "-"}</div>
-            <div className="text-sm">Date: {invoice.invoice_date}</div>
+            <div className="text-sm">Date: {invoice.invoice_date_formatted || formatDateDDMMYYYY(invoice.invoice_date)}</div>
             <div className="text-sm">Status: {invoice.status}</div>
           </div>
           <div className="text-right">

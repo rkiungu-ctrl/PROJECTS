@@ -1,4 +1,5 @@
-from pydantic import BaseModel, validator
+import pydantic as _pyd
+from pydantic import BaseModel, validator, ConfigDict
 from typing import List, Optional
 from datetime import date
 
@@ -21,8 +22,10 @@ class JournalLineCreate(JournalLineBase):
 
 
 class JournalLineOut(JournalLineBase):
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True
 
 
 class CreateJournalEntry(BaseModel):
@@ -38,6 +41,7 @@ class JournalEntryOut(BaseModel):
     reference: Optional[str]
     narration: Optional[str]
     lines: List[JournalLineOut]
-
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True, orm_mode=True)
+    if _pyd.__version__.split('.')[0] == '1':
+        class Config:
+            orm_mode = True

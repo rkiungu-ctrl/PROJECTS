@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import * as XLSX from "xlsx";
+import Pagination from "../components/Pagination";
+import { API_BASE } from "../lib/api";
 
 const Customers = () => {
   const [customers, setCustomers] = useState([]);
@@ -13,7 +15,7 @@ const Customers = () => {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [editData, setEditData] = useState({});
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20;
+  const [itemsPerPage, setItemsPerPage] = useState(50);
 
   // Add Customer Form State
   const [clientNumber, setClientNumber] = useState("");
@@ -33,15 +35,17 @@ const Customers = () => {
 
   const fetchCustomers = async () => {
     try {
-      const res = await axios.get("http://127.0.0.1:8000/customers/", {
-        auth: {
-          username: localStorage.getItem("username"),
-          password: localStorage.getItem("password"),
-        },
-      });
+      const res = await axios.get(`${API_BASE}/customers/`);
       setCustomers(res.data);
-    } catch {
-      setError("Failed to fetch customers.");
+    } catch (err) {
+      console.error("Fetch customers error:", err);
+      if (err.response) {
+        setError(`Failed to fetch customers: ${err.response.status} ${err.response.statusText} - ${err.response.data?.detail || JSON.stringify(err.response.data)}`);
+      } else if (err.request) {
+        setError("No response from server. Check your network or backend.");
+      } else {
+        setError(`Error: ${err.message}`);
+      }
     }
   };
 
@@ -52,7 +56,7 @@ const Customers = () => {
 
     try {
       await axios.post(
-        "http://127.0.0.1:8000/customers/",
+        `${API_BASE}/customers/`,
         {
           client_number: parseInt(clientNumber),
           name,
@@ -98,7 +102,7 @@ const Customers = () => {
 
     try {
       const res = await axios.post(
-        "http://127.0.0.1:8000/customer_import/upload",
+        `${API_BASE}/customer_import/upload`,
         formData,
         {
           headers: { "Content-Type": "multipart/form-data" },
@@ -138,12 +142,7 @@ const Customers = () => {
   const handleDelete = async (id) => {
     if (!window.confirm("Are you sure you want to delete this customer?")) return;
     try {
-      await axios.delete(`http://127.0.0.1:8000/customers/${id}`, {
-        auth: {
-          username: localStorage.getItem("username"),
-          password: localStorage.getItem("password"),
-        },
-      });
+      await axios.delete(`${API_BASE}/customers/${id}`);
       fetchCustomers();
     } catch {
       setError("Failed to delete customer.");
@@ -163,7 +162,7 @@ const Customers = () => {
   const saveEdit = async () => {
     try {
       await axios.put(
-        `http://127.0.0.1:8000/customers/${editingCustomer}`,
+        `${API_BASE}/customers/${editingCustomer}`,
         {
           client_number: editData.client_number,
           name: editData.name,
@@ -171,12 +170,6 @@ const Customers = () => {
           email: editData.email,
           kra_pin: editData.kra_pin,
           address: editData.address,
-        },
-        {
-          auth: {
-            username: localStorage.getItem("username"),
-            password: localStorage.getItem("password"),
-          },
         }
       );
       setEditingCustomer(null);
@@ -276,24 +269,15 @@ const Customers = () => {
         </tbody>
       </table>
 
-      {/* Pagination */}
-      <div className="flex justify-center items-center space-x-4">
-        <button
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage((prev) => prev - 1)}
-          className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
-        >
-          Previous
-        </button>
-        <span className="font-semibold">Page {currentPage} of {totalPages}</span>
-        <button
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage((prev) => prev + 1)}
-          className="px-3 py-1 bg-gray-200 rounded disabled:opacity-50"
-        >
-          Next
-        </button>
-      </div>
+      <Pagination
+        currentPage={currentPage}
+        totalItems={filteredCustomers.length}
+        itemsPerPage={itemsPerPage}
+        onPageChange={setCurrentPage}
+        onItemsPerPageChange={setItemsPerPage}
+        pageSizeOptions={[20, 50, 100]}
+        itemLabel="customers"
+      />
     </div>
   );
 };

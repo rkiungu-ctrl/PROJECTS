@@ -9,14 +9,23 @@ function AccountSearchDropdown({ onSelect }) {
   const [showDropdown, setShowDropdown] = useState(false);
 
   useEffect(() => {
-    if (debouncedSearch.trim().length > 0) {
-      axios
-        .get(`/accounts/search?query=${debouncedSearch}`)
-        .then((res) => setResults(res.data))
-        .catch((err) => console.error("Search error", err));
-    } else {
-      setResults([]);
-    }
+    const run = async () => {
+      const q = debouncedSearch.trim();
+      if (q.length === 0) {
+        setResults([]);
+        return;
+      }
+      try {
+        const res = await axios.get(`http://localhost:8000/accounts/search?query=${encodeURIComponent(q)}`);
+        const data = res.data;
+        const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        setResults(items);
+      } catch (err) {
+        console.error("Search error", err);
+        setResults([]);
+      }
+    };
+    run();
   }, [debouncedSearch]);
 
   const handleSelect = (account) => {

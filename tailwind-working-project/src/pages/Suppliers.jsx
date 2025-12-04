@@ -9,7 +9,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../lib/api";
 const SUPPLIERS_ENDPOINT = `${API_BASE}/suppliers/`;                // GET (list), POST (create)
 const SUPPLIER_BY_ID = (id) => `${API_BASE}/suppliers/${id}`;       // PUT, DELETE
 const SUPPLIERS_BALANCES_ENDPOINT = `${API_BASE}/suppliers/`;
@@ -95,7 +95,7 @@ const Suppliers = () => {
         contact_person: form.contact_person || null,
         phone: form.phone || null,
         email: form.email || null,
-        kra_pin: form.pin || null,
+        pin: form.pin || null,
         address: form.address || null,
         bank_name: form.bank_name || null,
         bank_branch: form.bank_branch || null,
@@ -119,7 +119,7 @@ const Suppliers = () => {
       contact_person: s.contact_person || "",
       phone: s.phone || "",
       email: s.email || "",
-      pin: s.kra_pin || "",
+      pin: s.pin || "",
       address: s.address || "",
       bank_name: s.bank_name || "",
       bank_branch: s.bank_branch || "",
@@ -148,7 +148,7 @@ const Suppliers = () => {
       contact_person: form.contact_person || null,
       phone: form.phone || null,
       email: form.email || null,
-      kra_pin: form.pin || null,
+      pin: form.pin || null,
       address: form.address || null,
       bank_name: form.bank_name || null,
       bank_branch: form.bank_branch || null,
@@ -199,7 +199,7 @@ const Suppliers = () => {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return (suppliers || []).filter((s) =>
-      [s.name, s.phone, s.email, s.kra_pin, s.address]
+      [s.name, s.phone, s.email, s.pin, s.address]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q))
     );
@@ -209,7 +209,7 @@ const Suppliers = () => {
   const downloadTemplate = () => {
     const wb = XLSX.utils.book_new();
     const wsData = [
-      ["name", "phone", "email", "kra_pin", "address"], // headers
+      ["name", "phone", "email", "pin", "address"], // headers
       // sample rows (optional):
       // ["ABC Ltd", "0712...", "info@abc.com", "P0XXXXXXX", "P.O. Box 123, Nairobi"],
     ];
@@ -223,7 +223,7 @@ const Suppliers = () => {
       name: s.name || "",
       phone: s.phone || "",
       email: s.email || "",
-      kra_pin: s.kra_pin || "",
+      kra_pin: s.pin || "",
       address: s.address || "",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -259,7 +259,14 @@ const Suppliers = () => {
           name: r.name || r.Name || r.NAME || "",
           phone: r.phone || r.Phone || r.PHONE || null,
           email: r.email || r.Email || r.EMAIL || null,
-          kra_pin: r.kra_pin || r.KRA_PIN || r.KRA || r.kra || null,
+          pin:
+            r.pin ||
+            r.PIN ||
+            r.kra_pin ||
+            r.KRA_PIN ||
+            r.KRA ||
+            r.kra ||
+            null,
           address: r.address || r.Address || r.ADDRESS || null,
         };
         if (!payload.name) { fail++; continue; }
@@ -401,13 +408,15 @@ const Suppliers = () => {
             <colgroup>
               <col className="w-[9rem]" />   {/* Actions */}
               <col className="w-[14rem]" />  {/* Supplier Code/Number */}
-              <col className="w-[28rem]" />  {/* Name */}
+              <col className="w-[16rem]" />  {/* KRA PIN */}
+              <col className="w-[24rem]" />  {/* Name */}
               <col className="w-[14rem]" />  {/* Payable Balance */}
             </colgroup>
             <thead className="bg-gray-50 border-b sticky top-0">
               <tr>
                 <th className="text-left font-semibold px-4 py-2">Actions</th>
                 <th className="text-left font-semibold px-4 py-2">Supplier Code</th>
+                <th className="text-left font-semibold px-4 py-2">KRA PIN</th>
                 <th className="text-left font-semibold px-4 py-2">Name</th>
                 <th className="text-left font-semibold px-4 py-2">Payable Balance</th>
               </tr>
@@ -434,6 +443,9 @@ const Suppliers = () => {
                   </td>
                   <td className="px-4 py-2 align-top">
                     {s.supplier_code || s.supplier_number || "-"}
+                  </td>
+                  <td className="px-4 py-2 align-top">
+                    {s.pin || "-"}
                   </td>
                   <td className="px-4 py-2 align-top">
                     <div className="font-medium">{s.name}</div>
@@ -467,7 +479,7 @@ const Suppliers = () => {
               <div><span className="font-semibold">Name:</span> {viewing.name}</div>
               <div><span className="font-semibold">Phone:</span> {viewing.phone || "-"}</div>
               <div><span className="font-semibold">Email:</span> {viewing.email || "-"}</div>
-              <div><span className="font-semibold">KRA PIN:</span> {viewing.kra_pin || "-"}</div>
+              <div><span className="font-semibold">KRA PIN:</span> {viewing.pin || "-"}</div>
               <div><span className="font-semibold">Address:</span> {viewing.address || "-"}</div>
               <div><span className="font-semibold">ID:</span> {viewing.id}</div>
               <div><span className="font-semibold">Contact Person:</span> {viewing.contact_person || "-"}</div>

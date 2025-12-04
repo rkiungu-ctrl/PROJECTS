@@ -15,7 +15,6 @@ const Sidebar = () => {
           My Accounting
         </Link>
       </div>
-
       {/* Scrollable nav area */}
       <nav className="flex-1 overflow-y-auto px-2 pb-6" style={{ scrollbarGutter: "stable" }}>
         {/* SUMMARY */}
@@ -32,7 +31,7 @@ const Sidebar = () => {
         </ul>
 
         {/* SALES */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Sales</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Sales</div>
         <ul className="space-y-1">
           <li>
             <NavLink
@@ -53,7 +52,7 @@ const Sidebar = () => {
         </ul>
 
         {/* PURCHASES */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Purchases</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Purchases</div>
         <ul className="space-y-1">
           <li>
             <NavLink
@@ -74,36 +73,36 @@ const Sidebar = () => {
         </ul>
 
         {/* BANKING */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Banking</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Banking</div>
         <ul className="space-y-1">
           <li>
             <NavLink
-              to="/bank-balances"
+              to="/bank-accounts"
               className={({ isActive }) => `${baseLink} ${isActive ? active : idle}`}
             >
-              Bank Balances
+              Bank & Cash Accounts
             </NavLink>
           </li>
           <li>
             <NavLink
-              to="/receipts"
+              to="/bank-payments"
               className={({ isActive }) => `${baseLink} ${isActive ? active : idle}`}
             >
-              Receipts
+              Bank Payments
             </NavLink>
           </li>
           <li>
             <NavLink
-              to="/payments"
+              to="/bank-rules"
               className={({ isActive }) => `${baseLink} ${isActive ? active : idle}`}
             >
-              Payments
+              Bank Rules
             </NavLink>
           </li>
         </ul>
 
         {/* INVENTORY */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Inventory</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Inventory</div>
         <ul className="space-y-1">
           <li>
             <NavLink
@@ -124,7 +123,7 @@ const Sidebar = () => {
         </ul>
 
         {/* PAYROLL */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Payroll</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Payroll</div>
         <ul className="space-y-1">
           <li>
             <NavLink
@@ -156,7 +155,7 @@ const Sidebar = () => {
         </ul>
 
         {/* ACCOUNTING */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Accounting</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Accounting</div>
         <ul className="space-y-1">
           <li>
             <NavLink to="/chart_of_accounts" className={({isActive}) => `${baseLink} ${isActive ? active : idle}`}>
@@ -181,7 +180,7 @@ const Sidebar = () => {
         </ul>
 
         {/* REPORTS */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Reports</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Reports</div>
         <ul className="space-y-1">
           <li>
             <NavLink to="/reports" className={({isActive}) => `${baseLink} ${isActive ? active : idle}`}>
@@ -191,7 +190,7 @@ const Sidebar = () => {
         </ul>
 
         {/* COMPANY */}
-        <div className="mt-6 mb-2 text-xs uppercase tracking-wider text-gray-400">Company</div>
+        <div className="mt-6 mb-2 pt-4 border-t border-gray-700 text-xs uppercase tracking-wider text-gray-400">Company</div>
         <ul className="space-y-1">
           <li>
             <NavLink

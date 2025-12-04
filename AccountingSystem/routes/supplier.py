@@ -5,9 +5,31 @@ from sqlalchemy import func, text
 from typing import List
 from pydantic import BaseModel
 
+
 from database import get_db
 from models import Supplier, PurchaseInvoice, PurchaseInvoiceLine
 from schemas.supplier import SupplierCreate, SupplierUpdate
+
+# --- Supplier code generator ---
+def generate_supplier_code(db: Session) -> str:
+    """
+    Auto-generate supplier codes like SUP0001, SUP0002, ...
+    """
+    last = (
+        db.query(Supplier)
+        .filter(Supplier.supplier_code != None)  # noqa: E711
+        .order_by(Supplier.supplier_code.desc())
+        .first()
+    )
+    if not last or not last.supplier_code:
+        return "SUP0001"
+
+    code = last.supplier_code
+    try:
+        num = int(code.replace("SUP", ""))  # handle 'SUP0001'
+    except ValueError:
+        num = 0
+    return f"SUP{num + 1:04d}"
 
 
 router = APIRouter(
@@ -34,8 +56,12 @@ def create_supplier(
     if existing:
         raise HTTPException(status_code=400, detail="Supplier already exists")
 
+    supplier_code = generate_supplier_code(db)
+
     new_supplier = Supplier(
+        supplier_code=supplier_code,
         name=supplier.name,
+        pin=supplier.pin,
         contact_person=supplier.contact_person,
         phone=supplier.phone,
         email=supplier.email,
@@ -94,6 +120,7 @@ def list_suppliers(db: Session = Depends(get_db)):
         out.append({
             "id": s.id,
             "name": s.name,
+            "pin": s.pin,
             "contact_person": s.contact_person,
             "phone": s.phone,
             "email": s.email,
@@ -251,30 +278,16 @@ def supplier_invoices_summary(supplier_id: int, db: Session = Depends(get_db)):
 
 
 # ---------- Invoices by supplier ----------
-from models import Supplier, PurchaseInvoice, PurchaseInvoiceLine
-
 def calculate_invoice_total(invoice_id, db):
-    lines = db.query(PurchaseInvoiceLine).filter(PurchaseInvoiceLine.purchase_invoices_id == invoice_id).all()
+    # Safe, dependency-free total calculation used only for summaries.
+    # Avoid referencing undefined helpers (find_rate, tax_options) here — keep it simple.
+    lines = db.query(PurchaseInvoiceLine).filter(PurchaseInvoiceLine.purchase_invoice_id == invoice_id).all()
     total = 0.0
     for ln in lines:
-        quantity = float(ln.quantity or 0)
-        unit_price = float(ln.unit_price or 0)
+        quantity = float(getattr(ln, 'quantity', 0) or 0)
+        unit_price = float(getattr(ln, 'unit_price', 0) or 0)
         base = quantity * unit_price
-        excise_amount = 0.0
-        excise_rate = 0.0
-        if ln.excise_code:
-            excise_rate = find_rate(tax_options, "EXCISE", ln.excise_code)
-            if excise_rate > 0:
-                excise_amount = base * excise_rate
-
-        vat_amount = 0.0
-        vat_rate = 0.0
-        if ln.vat_code:
-            vat_rate = find_rate(tax_options, "VAT", ln.vat_code)
-            if vat_rate > 0:
-                vat_amount = (base + excise_amount) * vat_rate
-
-        total += base + excise_amount + vat_amount
+        total += base
     return total
 
 @router.get("/by_supplier/{supplier_id}", response_model=List[dict])

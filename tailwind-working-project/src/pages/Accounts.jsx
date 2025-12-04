@@ -10,7 +10,7 @@ const typeOrder = {
   Expense: 5,
 };
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from "../lib/api";
 
 const Accounts = () => {
   const [accounts, setAccounts] = useState([]);
