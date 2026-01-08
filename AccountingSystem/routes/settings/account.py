@@ -160,8 +160,8 @@ def search_accounts(query: str = Query(..., min_length=1), db: Session = Depends
         .limit(25)
         .all()
     )
-    # keep the lean payload your UI already expects
-    return [{"account_code": a.account_code, "name": a.name} for a in results]
+    # include id so selectors can bind target_account_id directly
+    return [{"id": a.id, "account_code": a.account_code, "name": a.name} for a in results]
 
 # Alias without trailing slash and supporting 'q' param (used by Journal form)
 @router.get("/search")
@@ -181,7 +181,7 @@ def search_accounts_alias(
         .limit(25)
         .all()
     )
-    return [{"account_code": a.account_code, "name": a.name} for a in results]
+    return [{"id": a.id, "account_code": a.account_code, "name": a.name} for a in results]
 
 
 # ---------------------------- UPDATE (ID) -------------------------

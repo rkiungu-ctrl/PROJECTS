@@ -211,7 +211,7 @@ const BankRulesPage = () => {
             />
           </div>
           <div>
-            <label className="text-sm font-medium">Payee to set</label>
+            <label className="text-sm font-medium">Payee name (optional)</label>
             <input className="border rounded px-2 py-1 w-full" value={form.set_payee_to} onChange={(e)=>setForm({...form, set_payee_to:e.target.value})} />
           </div>
           <div className="col-span-2 flex gap-2 mt-2">
