@@ -11,7 +11,7 @@ class PurchaseCreate(BaseModel):
     supplier_name: str | None = None
     description: Optional[str] = None
     cu_inv_number: Optional[str] = None
-    lines: List[PurchaseLineCreate]
+    lines: List[PurchaseInvoiceLineCreate]
 
 class PurchaseResponse(BaseModel):
     purchase_number: str
@@ -26,7 +26,7 @@ class PurchaseResponse(BaseModel):
     cu_inv_number: Optional[str] = None
     status: str
     balance_due: Optional[float] = 0
-    lines: List[PurchaseLineResponse]
+    lines: List[PurchaseInvoiceLineResponse]
     grand_total: float
 
     class Config:
