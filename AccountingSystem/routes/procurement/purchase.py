@@ -20,7 +20,7 @@ from utils.rounding import r0
 router = APIRouter(prefix="/purchases", tags=["Procurement"])
 
 # -------------------- GET Purchases (with optional filters) --------------------
-@router.get("/", response_model=PurchaseInvoiceListResponse)
+@router.get("/", response_model=PurchaseListResponse)
 def list_purchases(
     page: int = Query(1, ge=1),
     limit: int = Query(30, ge=1, le=100),
@@ -80,7 +80,7 @@ def list_purchases(
             lines=lines,
             grand_total=float(to_decimal(inv.amount) + vat_total + excise_total)
         ))
-    return PurchaseInvoiceListResponse(
+    return PurchaseListResponse(
         items=items,
         total=total,
         page=page,
