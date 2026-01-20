@@ -15,12 +15,9 @@ from schemas.purchase_invoice import (
     PurchaseInvoiceOut,
 )
 
-router = APIRouter(prefix="/purchases", tags=["Purchases"])
-
 # -------------------- Helpers --------------------
 
 def calculate_next_issue_date(current_date: date, recurrence_interval: str) -> date:
-    """Calculate the next issue date based on current date and recurrence interval"""
     if not recurrence_interval:
         return current_date
     
