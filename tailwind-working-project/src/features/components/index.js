@@ -1,0 +1,10 @@
+// Proxy: re-exports employee sub-components used by EmployeeDetailsModal
+export { default as PersonalDetails } from "../employee/PersonalDetails";
+export { default as SalaryDetails } from "../employee/SalaryDetails";
+export { default as ContactDetails } from "../employee/ContactDetails";
+export { default as Documents } from "../employee/Documents";
+export { default as Deductions } from "../employee/Deductions";
+export { default as Benefits } from "../employee/Benefits";
+export { default as Earnings } from "../employee/Earnings";
+export { default as LoansAdvance } from "../employee/LoansAdvance";
+export { default as Increments } from "../employee/Increments";

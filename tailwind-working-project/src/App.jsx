@@ -2,22 +2,22 @@
 import React from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import CompanyHeader from "./components/CompanyHeader";
+import CompanyHeader from "./features/settings/CompanyHeader";
 import SidebarLayout from "./SidebarLayout";
 
 // Auth / landing
-import Login from "./pages/Login";
+import Login from "./features/auth/Login";
 
 // Dashboard
-import Dashboard from "./pages/Dashboard";
+import Dashboard from "./features/dashboard/Dashboard";
 
 // Sales
-import Customers from "./pages/Customers";
+import Customers from "./features/sales/Customers";
 import InvoicesPage from "./pages/invoices/InvoicesPage";
 
 
 // Purchases
-import Suppliers from "./pages/Suppliers";
+import Suppliers from "./features/procurement/suppliers/Suppliers";
 import PurchaseInvoices from "./pages/Purchases/PurchaseInvoices";
 import PurchaseForm from "./pages/Purchases/PurchaseForm";
 import PendingRecurringInvoices from "./pages/Purchases/PendingRecurringInvoices";
@@ -35,32 +35,32 @@ import BankRulesPage from "./pages/bank/BankRulesPage";
 import BankStatementImport from "./pages/BankStatementImport";
 
 // Accounting
-import Accounts from "./pages/Accounts";
-import JournalEntryForm from "./pages/JournalEntryForm"; // <-- move under Accounts
-import Taxes from "./pages/Taxes";
-import Currencies from "./pages/Currencies";
+import Accounts from "./features/accounting/Accounts";
+import JournalEntryForm from "./pages/JournalEntryForm";
+import Taxes from "./features/settings/Taxes";
+import Currencies from "./features/settings/Currencies";
 
 // Payroll
-import EmployeeList from "./employee/EmployeeList";
-import PayrollPage from "./payroll/PayrollPage";
-import ViewPayslips from "./payroll/ViewPayslips";
-import AddSinglePayroll from "./payroll/AddSinglePayroll";
-import PayrollEditPage from "./payroll/PayrollEditPage";
-import PayrollSettingsPage from "./payroll/PayrollSettingsPage";
+import EmployeeList from "./features/employee/EmployeeList";
+import PayrollPage from "./features/payroll/PayrollPage";
+import ViewPayslips from "./features/payroll/ViewPayslips";
+import AddSinglePayroll from "./features/payroll/AddSinglePayroll";
+import PayrollEditPage from "./features/payroll/PayrollEditPage";
+import PayrollSettingsPage from "./features/payroll/PayrollSettingsPage";
 
 // Company
-import CompanySettings from "./pages/CompanySettings";
+import CompanySettings from "./features/settings/CompanySettings";
 
 // Inventory
-import ProductList from "./pages/inventory/ProductList";
-import ProductForm from "./pages/inventory/ProductForm";
-import ProductLedger from "./pages/inventory/ProductLedger";
-import LowStockProducts from "./pages/inventory/LowStockProducts";
-import ProductView from "./pages/inventory/ProductView"; // Create this component if missing
-import ProductEdit from "./pages/inventory/ProductEdit"; // Create this component if missing
+import ProductList from "./features/procurement/inventory/ProductList";
+import ProductForm from "./features/procurement/inventory/ProductForm";
+import ProductLedger from "./features/procurement/inventory/ProductLedger";
+import LowStockProducts from "./features/procurement/inventory/LowStockProducts";
+import ProductView from "./features/procurement/inventory/ProductView";
+import ProductEdit from "./features/procurement/inventory/ProductEdit";
 
 // Reports
-import Reports from "./pages/Reports";
+import Reports from "./features/reporting/Reports";
 
 function App() {
   return (
