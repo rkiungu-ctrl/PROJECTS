@@ -1,9 +1,8 @@
 // src/pages/Dashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { formatDateDDMMYYYY } from "../utils/dateUtils";
-
-const API_BASE = "http://127.0.0.1:8000";
+import { formatDateDDMMYYYY } from "../../utils/dateUtils";
+import { API_BASE } from "../../lib/api";
 const GET_PROFILE = `${API_BASE}/company/profile`;
 
 const formatKES = (n) =>

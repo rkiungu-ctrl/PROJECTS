@@ -1,4 +1,4 @@
-import useCompanyProfile from "../hooks/useCompanyProfile";
+import useCompanyProfile from "../../hooks/useCompanyProfile";
 
 export default function AppHeader() {
   const { profile, loading, bust } = useCompanyProfile();
